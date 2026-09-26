@@ -33,8 +33,8 @@ jobs:
           WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MAX_ITEMS: "30"
-          MAX_PER_SOURCE: "1"
+          MAX_PER_SOURCE: "2"
           LOOKBACK_HOURS: "24"
-          DIGEST_ITEMS: "6"
+          DIGEST_ITEMS: "20"
           LOG_PREVIEW: "1"
         run: python scripts/fetch_sea_news.py
