@@ -41,6 +41,7 @@ MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 2))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
 DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 20))
 USER_AGENT = "Mozilla/5.0 (compatible; sea-news-digest/1.0; +https://github.com/forwardok43-jpg/sea-news-digest)"
+SOCIAL_DOMAINS = ("facebook.com", "instagram.com", "x.com", "twitter.com", "youtube.com", "tiktok.com")
 
 DEFAULT_SUMMARY_MODELS = (
     "thinkingmachines/inkling:free,"
@@ -193,6 +194,8 @@ def fetch_source(session: requests.Session, source: dict) -> list[Article]:
         title = clean_title(clean_text(entry.get("title")), publisher)
         link = clean_text(entry.get("link"))
         if not title or not link:
+            continue
+        if any(domain in publisher.casefold() for domain in SOCIAL_DOMAINS):
             continue
 
         articles.append(
