@@ -41,9 +41,12 @@ DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 8))
 USER_AGENT = "Mozilla/5.0 (compatible; sea-news-digest/1.0; +https://github.com/forwardok43-jpg/sea-news-digest)"
 
 DEFAULT_SUMMARY_MODELS = (
+    "thinkingmachines/inkling:free,"
+    "dots-studio/dots-3-note-preview:free,"
+    "nvidia/nemotron-3-super-120b-a12b:free,"
+    "liquid/lfm-2.5-2.6b:free,"
     "qwen/qwen3.8-27b:free,"
     "google/gemma-4-31b-it:free,"
-    "nvidia/nemotron-3-super-120b-a12b:free,"
     "openrouter/free"
 )
 SUMMARY_MODELS = [
@@ -427,8 +430,17 @@ def request_openrouter_summaries(
     if not choices:
         raise RuntimeError("OpenRouter returned no choices")
 
-    content = choices[0].get("message", {}).get("content", "")
-    return parse_summary_response(content)
+    message = choices[0].get("message", {}) or {}
+    content = message.get("content") or message.get("reasoning") or ""
+    if not isinstance(content, str):
+        raise RuntimeError(f"Unexpected content type: {type(content).__name__}")
+
+    summaries = parse_summary_response(content)
+    if not summaries:
+        raise RuntimeError(
+            f"Could not parse summaries: {truncate_text(content, 300)}"
+        )
+    return summaries
 
 
 def summarize_articles(articles: list[Article]) -> list[Article]:
@@ -449,13 +461,16 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
                 break
         except Exception as exc:
             print(f"[WARN] Summary model failed ({model}): {exc}")
+            time.sleep(2)
+
+    if not summaries:
+        print("[WARN] All free summary models failed; using title fallback")
 
     summarized: list[Article] = []
     for index, article in enumerate(articles, start=1):
         summary = normalize_summary(summaries.get(index, ""), article)
         summarized.append(replace(article, summary=summary))
     return summarized
-
 
 def source_label(article: Article) -> str:
     if article.publisher:
