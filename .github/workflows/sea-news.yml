@@ -35,6 +35,6 @@ jobs:
           MAX_ITEMS: "30"
           MAX_PER_SOURCE: "1"
           LOOKBACK_HOURS: "24"
-          DIGEST_ITEMS: "8"
+          DIGEST_ITEMS: "6"
           LOG_PREVIEW: "1"
         run: python scripts/fetch_sea_news.py
