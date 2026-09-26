@@ -36,9 +36,9 @@ def env_int(name: str, default: int) -> int:
 
 
 MAX_ITEMS = max(1, env_int("MAX_ITEMS", 30))
-MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 1))
+MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 2))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
-DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 6))
+DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 20))
 USER_AGENT = "Mozilla/5.0 (compatible; sea-news-digest/1.0; +https://github.com/forwardok43-jpg/sea-news-digest)"
 
 DEFAULT_SUMMARY_MODELS = (
@@ -96,6 +96,7 @@ class Article:
     source_lang: str = ""
     content: str = ""
     summary: str = ""
+    title_zh: str = ""
 
 
 def clean_text(value: object) -> str:
@@ -484,50 +485,38 @@ def translate_title_to_chinese(title: str, source_lang: str) -> str:
     return ""
 
 def summarize_articles(articles: list[Article]) -> list[Article]:
-    if not OPENROUTER_API_KEY:
-        print("[WARN] OPENROUTER_API_KEY is missing; using title fallback")
-        return [
-            replace(article, summary=truncate_text(article.title, 18))
-            for article in articles
-        ]
-
     summaries: dict[int, str] = {}
-    minimum_valid = max(1, len(articles) // 2)
 
-    for model in SUMMARY_MODELS:
-        try:
-            print(f"[SUMMARY] Trying model: {model}")
-            candidate = request_openrouter_summaries(articles, model)
-            valid = {
-                item_id: summary
-                for item_id, summary in candidate.items()
-                if chinese_char_count(summary) >= 6
-            }
-            if len(valid) >= minimum_valid:
-                summaries = valid
+    if OPENROUTER_API_KEY:
+        minimum_valid = max(1, len(articles) // 2)
+        for model in SUMMARY_MODELS:
+            try:
+                print(f"[SUMMARY] Trying model: {model}")
+                candidate = request_openrouter_summaries(articles, model)
+                valid = {
+                    item_id: summary
+                    for item_id, summary in candidate.items()
+                    if chinese_char_count(summary) >= 6
+                }
+                if len(valid) >= minimum_valid:
+                    summaries = valid
+                    print(
+                        f"[SUMMARY] Success with model: {model}; "
+                        f"valid={len(valid)}/{len(articles)}"
+                    )
+                    break
                 print(
-                    f"[SUMMARY] Success with model: {model}; "
-                    f"valid={len(valid)}/{len(articles)}"
+                    f"[WARN] Model returned insufficient Chinese summaries "
+                    f"({len(valid)}/{len(articles)}): {model}"
                 )
-                for item_id in sorted(valid)[:3]:
-                    print(f"[SUMMARY SAMPLE] {item_id}: {truncate_text(valid[item_id], 30)}")
-                break
-
-            print(
-                f"[WARN] Model returned insufficient Chinese summaries "
-                f"({len(valid)}/{len(articles)}): {model}"
-            )
-        except Exception as exc:
-            print(f"[WARN] Summary model failed ({model}): {exc}")
-        time.sleep(2)
-
-    if not summaries:
-        print("[WARN] All free summary models failed; using title fallback")
+            except Exception as exc:
+                print(f"[WARN] Summary model failed ({model}): {exc}")
+            time.sleep(2)
+    else:
+        print("[WARN] OPENROUTER_API_KEY is missing")
 
     translated_titles: dict[int, str] = {}
     for index, article in enumerate(articles, start=1):
-        if summaries.get(index):
-            continue
         translated = translate_title_to_chinese(article.title, article.source_lang)
         if translated:
             translated_titles[index] = translated
@@ -535,9 +524,13 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
     summarized: list[Article] = []
     for index, article in enumerate(articles, start=1):
         summary = normalize_summary(summaries.get(index, ""), article)
-        if not summary:
-            summary = truncate_text(translated_titles.get(index, article.title), 18)
-        summarized.append(replace(article, summary=summary))
+        summarized.append(
+            replace(
+                article,
+                summary=summary,
+                title_zh=translated_titles.get(index, ""),
+            )
+        )
     return summarized
 
 def source_label(article: Article) -> str:
@@ -569,22 +562,25 @@ def build_messages(articles: list[Article]) -> list[str]:
     parts = [
         "【东南亚新闻简报】",
         f"{now:%Y-%m-%d %H:%M} 北京时间",
-        f"覆盖 {len(articles)} 个重点国家｜过去 {LOOKBACK_HOURS} 小时",
+        f"过去 {LOOKBACK_HOURS} 小时｜精选 {len(articles)} 条热点",
         "────────────────",
     ]
 
     article_blocks: list[str] = []
     for article in articles:
         local_time = article.published.astimezone(TZ).strftime("%m-%d %H:%M")
-        article_blocks.append(
-            f"【{article.region}】\n"
-            f"{article.summary}\n"
-            f"{source_label(article)} · {local_time}\n"
-            f"{article.link}"
-        )
+        title = article.title_zh or article.title
+        block = f"【{article.region}】\n{title}"
+        if article.summary and article.summary != title:
+            block += f"\n摘要：{article.summary}"
+        block += f"\n{source_label(article)} · {local_time}"
+        article_blocks.append(block)
 
     text = "\n\n".join(parts + article_blocks)
-    text += "\n\n────────────────\n说明：摘要由免费模型生成；摘要失败时显示中文标题。重要信息请以原文为准。"
+    text += (
+        "\n\n────────────────\n"
+        "说明：标题和摘要由免费翻译及摘要服务自动生成，重要信息请以原文为准。"
+    )
 
     messages = split_text(text, 1900)
     if len(messages) > 1:
@@ -592,7 +588,6 @@ def build_messages(articles: list[Article]) -> list[str]:
             f"【东南亚新闻简报（续）】\n\n{message}" for message in messages[1:]
         ]
     return messages
-
 
 def send_wecom_text(session: requests.Session, content: str) -> None:
     payload = {"msgtype": "text", "text": {"content": content}}
