@@ -499,7 +499,7 @@ def split_text(text: str, limit_bytes: int) -> list[str]:
 def build_messages(articles: list[Article]) -> list[str]:
     now = datetime.now(TZ)
     parts = [
-        "**东南亚新闻简报**",
+        "【东南亚新闻简报】",
         f"{now:%Y-%m-%d %H:%M} 北京时间",
         f"覆盖 {len(articles)} 个重点国家｜过去 {LOOKBACK_HOURS} 小时",
         "────────────────",
@@ -509,7 +509,7 @@ def build_messages(articles: list[Article]) -> list[str]:
     for article in articles:
         local_time = article.published.astimezone(TZ).strftime("%m-%d %H:%M")
         article_blocks.append(
-            f"**{article.region}**\n"
+            f"【{article.region}】\n"
             f"{article.summary}\n"
             f"来源：{source_label(article)}｜时间：{local_time}\n"
             f"链接：{article.link}"
@@ -518,16 +518,16 @@ def build_messages(articles: list[Article]) -> list[str]:
     text = "\n\n".join(parts + article_blocks)
     text += "\n\n────────────────\n说明：摘要由免费模型自动生成，重要信息请以原文为准。"
 
-    messages = split_text(text, 3800)
+    messages = split_text(text, 1900)
     if len(messages) > 1:
         messages = [messages[0]] + [
-            f"**东南亚新闻简报（续）**\n\n{message}" for message in messages[1:]
+            f"【东南亚新闻简报（续）】\n\n{message}" for message in messages[1:]
         ]
     return messages
 
 
-def send_wecom_markdown(session: requests.Session, content: str) -> None:
-    payload = {"msgtype": "markdown", "markdown": {"content": content}}
+def send_wecom_text(session: requests.Session, content: str) -> None:
+    payload = {"msgtype": "text", "text": {"content": content}}
     last_error = None
 
     for attempt in range(3):
@@ -576,7 +576,7 @@ def main() -> None:
         return
 
     for message in messages:
-        send_wecom_markdown(session, message)
+        send_wecom_text(session, message)
 
     print(f"Pushed {len(digest_articles)} country summaries in {len(messages)} message(s)")
 
