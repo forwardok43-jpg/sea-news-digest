@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import asyncio
 import calendar
 import html
+import json
 import os
 import re
 import time
-from collections import Counter
-from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlparse
 from zoneinfo import ZoneInfo
 
 import feedparser
 import requests
+import trafilatura
+from googlenewsdecoder import gnews_decoder_async
 
 
 TZ = ZoneInfo("Asia/Shanghai")
 WECOM_WEBHOOK_URL = os.getenv("WECOM_WEBHOOK_URL", "").strip()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
 
 
@@ -28,12 +34,37 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
-MAX_ITEMS = max(1, env_int("MAX_ITEMS", 20))
-MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 3))
+MAX_ITEMS = max(1, env_int("MAX_ITEMS", 30))
+MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 1))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
-OVERVIEW_ITEMS = max(3, env_int("OVERVIEW_ITEMS", 6))
-FOCUS_ITEMS = max(3, env_int("FOCUS_ITEMS", 5))
-USER_AGENT = "sea-news-digest/1.0"
+DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 8))
+USER_AGENT = "Mozilla/5.0 (compatible; sea-news-digest/1.0; +https://github.com/forwardok43-jpg/sea-news-digest)"
+
+DEFAULT_SUMMARY_MODELS = (
+    "qwen/qwen3.8-27b:free,"
+    "google/gemma-4-31b-it:free,"
+    "nvidia/nemotron-3-super-120b-a12b:free,"
+    "openrouter/free"
+)
+SUMMARY_MODELS = [
+    item.strip()
+    for item in os.getenv("SUMMARY_MODELS", DEFAULT_SUMMARY_MODELS).split(",")
+    if item.strip()
+]
+
+PRIORITY_REGIONS = [
+    "印度尼西亚",
+    "越南",
+    "泰国",
+    "菲律宾",
+    "马来西亚",
+    "新加坡",
+    "柬埔寨",
+    "缅甸",
+    "老挝",
+    "文莱",
+    "东帝汶",
+]
 
 SOURCES = [
     {"name": "🌏 东盟区域", "query": "ASEAN OR Southeast Asia", "lang": "en", "country": "SG"},
@@ -58,6 +89,8 @@ class Article:
     link: str
     published: datetime
     publisher: str
+    content: str = ""
+    summary: str = ""
 
 
 def clean_text(value: object) -> str:
@@ -74,15 +107,23 @@ def clean_title(title: str, publisher: str) -> str:
     return title
 
 
-def safe_markdown_title(title: str) -> str:
-    return re.sub(r"[\[\]*_`|#]", "", clean_text(title))
-
-
 def truncate_text(text: str, limit: int) -> str:
     text = clean_text(text)
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def normalize_summary(summary: str, article: Article) -> str:
+    text = clean_text(summary)
+    text = re.sub(r"^(摘要|总结|简讯)[：:]\s*", "", text)
+    text = text.strip("\"'“”")
+    text = text.rstrip("。！？!?，,；;：:")
+    if len(text) > 18:
+        text = text[:18].rstrip("。！？!?，,；;：:")
+    if len(text) < 8:
+        return truncate_text(clean_title(article.title, article.publisher), 18)
+    return text
 
 
 def build_google_news_url(query: str, lang: str, country: str) -> str:
@@ -190,17 +231,17 @@ def collect_articles(session: requests.Session):
     return unique_articles[:MAX_ITEMS], failures
 
 
-def pick_representative(articles: list[Article], limit: int) -> list[Article]:
+def select_digest_articles(articles: list[Article], limit: int) -> list[Article]:
     selected: list[Article] = []
     selected_links: set[str] = set()
-    regions: set[str] = set()
 
-    for article in articles:
-        if article.region in regions:
+    for region in PRIORITY_REGIONS:
+        candidates = [article for article in articles if region in article.region]
+        if not candidates:
             continue
+        article = max(candidates, key=lambda item: item.published)
         selected.append(article)
         selected_links.add(article.link)
-        regions.add(article.region)
         if len(selected) >= limit:
             return selected
 
@@ -208,90 +249,218 @@ def pick_representative(articles: list[Article], limit: int) -> list[Article]:
         if article.link in selected_links:
             continue
         selected.append(article)
-        selected_links.add(article.link)
         if len(selected) >= limit:
             break
 
     return selected
 
 
-def article_meta(article: Article) -> str:
-    local_time = article.published.astimezone(TZ).strftime("%m-%d %H:%M")
-    parts = [article.publisher, local_time]
-    return " · ".join(part for part in parts if part)
+def decode_google_news_links(articles: list[Article]) -> list[Article]:
+    pending = [article for article in articles if "news.google.com" in article.link]
+    if not pending:
+        return articles
 
-
-def build_messages(articles: list[Article]) -> list[str]:
-    now = datetime.now(TZ)
-    overview = pick_representative(articles, min(OVERVIEW_ITEMS, len(articles)))
-    focus = pick_representative(articles, min(FOCUS_ITEMS, len(articles)))
-    focus_links = {article.link for article in focus}
-    remaining = [article for article in articles if article.link not in focus_links]
-
-    overview_lines = [
-        f"• {article.region}：{truncate_text(article.title, 78)}"
-        for article in overview
-    ]
-
-    sections: list[str] = [
-        "━━━━━━━━━━━━━━",
-        "东南亚新闻简报",
-        f"{now:%Y-%m-%d %H:%M} 北京时间",
-        f"范围：东盟及区域来源｜时段：过去 {LOOKBACK_HOURS} 小时｜精选 {len(articles)} 条",
-        "━━━━━━━━━━━━━━",
-        "【30 秒速览】\n\n" + "\n".join(overview_lines),
-    ]
-
-    focus_parts = ["【今日重点】"]
-    for index, article in enumerate(focus, start=1):
-        title = truncate_text(clean_text(article.title), 120)
-        focus_parts.append(
-            f"{index}. {article.region}\n"
-            f"{title}\n"
-            f"{article_meta(article)}\n"
-            f"{article.link}"
-        )
-    sections.append("\n\n".join(focus_parts))
-
-    if remaining:
-        other_parts = ["【其他动态】"]
-        current_region = None
-        for article in remaining:
-            if article.region != current_region:
-                if current_region is not None:
-                    other_parts.append("")
-                other_parts.append(article.region)
-                current_region = article.region
-
-            title = truncate_text(clean_text(article.title), 110)
-            other_parts.append(
-                f"• {title}\n"
-                f"{article_meta(article)}\n"
-                f"{article.link}"
+    try:
+        results = asyncio.run(
+            gnews_decoder_async(
+                [article.link for article in pending],
+                timeout=15,
+                concurrency=min(8, len(pending)),
             )
-        sections.append("\n".join(other_parts))
+        )
+    except Exception as exc:
+        print(f"[WARN] Google News link decoding failed: {exc}")
+        return articles
 
-    region_counts = Counter(article.region for article in articles)
-    top_regions = "、".join(region for region, _ in region_counts.most_common(3))
-    latest = max(article.published for article in articles).astimezone(TZ)
+    if isinstance(results, dict):
+        results = [results]
 
-    sections.append(
-        "【今日观察】\n\n"
-        f"• 本期共整理 {len(articles)} 条，覆盖 {len(region_counts)} 个来源分类。\n"
-        f"• 新闻量相对集中：{top_regions}。\n"
-        f"• 最新一条发布时间：{latest:%Y-%m-%d %H:%M}（北京时间）。"
+    decoded_links: dict[str, str] = {}
+    for article, result in zip(pending, results):
+        if result.get("success") and result.get("decoded_url"):
+            decoded_links[article.link] = result["decoded_url"]
+        else:
+            print(f"[WARN] Could not decode link for {article.region}")
+
+    return [
+        replace(article, link=decoded_links.get(article.link, article.link))
+        for article in articles
+    ]
+
+
+def extract_article_content(html_text: str, url: str) -> str:
+    try:
+        extracted = trafilatura.extract(
+            html_text,
+            url=url,
+            include_comments=False,
+            include_tables=False,
+            favor_recall=True,
+        )
+    except Exception:
+        extracted = None
+
+    if extracted:
+        return clean_text(extracted)
+
+    try:
+        metadata = trafilatura.extract_metadata(html_text)
+        if metadata and metadata.description:
+            return clean_text(metadata.description)
+    except Exception:
+        pass
+
+    return ""
+
+
+def fetch_article_content(article: Article) -> Article:
+    try:
+        response = requests.get(
+            article.link,
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+            },
+            timeout=(5, 18),
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        content = extract_article_content(response.text[:800000], response.url)
+        content = truncate_text(content, 1800)
+        print(f"[CONTENT] {article.region}: {len(content)} chars")
+        return replace(article, content=content)
+    except Exception as exc:
+        print(f"[WARN] Content fetch failed for {article.region}: {exc}")
+        return article
+
+
+def enrich_articles(articles: list[Article]) -> list[Article]:
+    if not articles:
+        return articles
+    with ThreadPoolExecutor(max_workers=min(6, len(articles))) as executor:
+        return list(executor.map(fetch_article_content, articles))
+
+
+def parse_summary_response(content: str) -> dict[int, str]:
+    text = content.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+
+    start = text.find("[")
+    end = text.rfind("]")
+    if start >= 0 and end > start:
+        try:
+            payload = json.loads(text[start : end + 1])
+            summaries: dict[int, str] = {}
+            for item in payload:
+                summaries[int(item["id"])] = clean_text(item.get("summary"))
+            if summaries:
+                return summaries
+        except Exception:
+            pass
+
+    summaries: dict[int, str] = {}
+    pattern = re.compile(
+        r'\{\s*"id"\s*:\s*(\d+)\s*,\s*"summary"\s*:\s*"((?:\\.|[^"\\])*)"\s*\}',
+        re.DOTALL,
     )
-    sections.append(
-        "━━━━━━━━━━━━━━\n\n"
-        "说明：本简报由新闻源自动汇总，标题和链接以原文为准。"
+    for item_id, encoded_summary in pattern.findall(text):
+        try:
+            summaries[int(item_id)] = clean_text(json.loads(f'"{encoded_summary}"'))
+        except Exception:
+            summaries[int(item_id)] = clean_text(encoded_summary)
+    return summaries
+
+
+def request_openrouter_summaries(
+    articles: list[Article],
+    model: str,
+) -> dict[int, str]:
+    payload_items = []
+    for index, article in enumerate(articles, start=1):
+        payload_items.append(
+            {
+                "id": index,
+                "country": article.region,
+                "title": article.title,
+                "source": article.publisher,
+                "content": truncate_text(article.content or article.title, 1200),
+            }
+        )
+
+    system_prompt = (
+        "你是专业的东南亚新闻中文编辑。请逐条概括新闻内容，"
+        "每条必须是简体中文，严格控制在12到18个汉字。"
+        "只陈述最重要事实，不评论、不重复标题、不写来源、不加句末标点。"
+        '只返回JSON数组，格式为：[{"id":1,"summary":"摘要"}]。'
+    )
+    user_prompt = json.dumps(payload_items, ensure_ascii=False)
+
+    response = requests.post(
+        OPENROUTER_URL,
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/forwardok43-jpg/sea-news-digest",
+            "X-Title": "SEA News Digest",
+        },
+        json={
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": 0.1,
+            "max_tokens": 900,
+        },
+        timeout=(10, 180),
     )
 
-    messages = split_text("\n\n".join(sections), 1800)
-    if len(messages) > 1:
-        messages = [messages[0]] + [
-            f"东南亚新闻简报（续）\n\n{message}" for message in messages[1:]
+    if response.status_code != 200:
+        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
+
+    data = response.json()
+    if data.get("error"):
+        raise RuntimeError(str(data["error"]))
+
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("OpenRouter returned no choices")
+
+    content = choices[0].get("message", {}).get("content", "")
+    return parse_summary_response(content)
+
+
+def summarize_articles(articles: list[Article]) -> list[Article]:
+    if not OPENROUTER_API_KEY:
+        print("[WARN] OPENROUTER_API_KEY is missing; using title fallback")
+        return [
+            replace(article, summary=truncate_text(article.title, 18))
+            for article in articles
         ]
-    return messages
+
+    summaries: dict[int, str] = {}
+    for model in SUMMARY_MODELS:
+        try:
+            print(f"[SUMMARY] Trying model: {model}")
+            summaries = request_openrouter_summaries(articles, model)
+            if summaries:
+                print(f"[SUMMARY] Success with model: {model}")
+                break
+        except Exception as exc:
+            print(f"[WARN] Summary model failed ({model}): {exc}")
+
+    summarized: list[Article] = []
+    for index, article in enumerate(articles, start=1):
+        summary = normalize_summary(summaries.get(index, ""), article)
+        summarized.append(replace(article, summary=summary))
+    return summarized
+
+
+def source_label(article: Article) -> str:
+    if article.publisher:
+        return article.publisher
+    return urlparse(article.link).netloc.replace("www.", "")
 
 
 def split_text(text: str, limit_bytes: int) -> list[str]:
@@ -312,8 +481,38 @@ def split_text(text: str, limit_bytes: int) -> list[str]:
     return messages
 
 
-def send_wecom_text(session: requests.Session, content: str) -> None:
-    payload = {"msgtype": "text", "text": {"content": content}}
+def build_messages(articles: list[Article]) -> list[str]:
+    now = datetime.now(TZ)
+    parts = [
+        "**东南亚新闻简报**",
+        f"{now:%Y-%m-%d %H:%M} 北京时间",
+        f"覆盖 {len(articles)} 个重点国家｜过去 {LOOKBACK_HOURS} 小时",
+        "────────────────",
+    ]
+
+    article_blocks: list[str] = []
+    for article in articles:
+        local_time = article.published.astimezone(TZ).strftime("%m-%d %H:%M")
+        article_blocks.append(
+            f"**{article.region}**\n"
+            f"{article.summary}\n"
+            f"来源：{source_label(article)}｜时间：{local_time}\n"
+            f"链接：{article.link}"
+        )
+
+    text = "\n\n".join(parts + article_blocks)
+    text += "\n\n────────────────\n说明：摘要由免费模型自动生成，重要信息请以原文为准。"
+
+    messages = split_text(text, 3800)
+    if len(messages) > 1:
+        messages = [messages[0]] + [
+            f"**东南亚新闻简报（续）**\n\n{message}" for message in messages[1:]
+        ]
+    return messages
+
+
+def send_wecom_markdown(session: requests.Session, content: str) -> None:
+    payload = {"msgtype": "markdown", "markdown": {"content": content}}
     last_error = None
 
     for attempt in range(3):
@@ -346,15 +545,25 @@ def main() -> None:
         print("No articles found in the requested time window")
         return
 
-    messages = build_messages(articles)
+    digest_articles = select_digest_articles(articles, DIGEST_ITEMS)
+    print(f"[DIGEST] Selected {len(digest_articles)} country-level articles")
+
+    digest_articles = decode_google_news_links(digest_articles)
+    digest_articles = enrich_articles(digest_articles)
+    digest_articles = summarize_articles(digest_articles)
+
+    messages = build_messages(digest_articles)
+    for index, message in enumerate(messages, start=1):
+        print(f"[SEND] Part {index}/{len(messages)}, {len(message.encode('utf-8'))} bytes")
+
     if DRY_RUN:
         print("\n\n--- message chunk ---\n\n".join(messages))
         return
 
     for message in messages:
-        send_wecom_text(session, message)
+        send_wecom_markdown(session, message)
 
-    print(f"Pushed {len(articles)} articles in {len(messages)} plain-text briefing messages")
+    print(f"Pushed {len(digest_articles)} country summaries in {len(messages)} message(s)")
 
 
 if __name__ == "__main__":
