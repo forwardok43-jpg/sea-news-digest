@@ -93,6 +93,7 @@ class Article:
     link: str
     published: datetime
     publisher: str
+    source_lang: str = ""
     content: str = ""
     summary: str = ""
 
@@ -126,10 +127,10 @@ def normalize_summary(summary: str, article: Article) -> str:
     text = re.sub(r"^(摘要|总结|简讯)[：:]\s*", "", text)
     text = text.strip("\"'“”")
     text = text.rstrip("。！？!?，,；;：:")
+    if chinese_char_count(text) < 4:
+        return ""
     if len(text) > 18:
         text = text[:18].rstrip("。！？!?，,；;：:")
-    if len(text) < 8:
-        return truncate_text(clean_title(article.title, article.publisher), 18)
     return text
 
 
@@ -199,6 +200,7 @@ def fetch_source(session: requests.Session, source: dict) -> list[Article]:
                 link=link,
                 published=published,
                 publisher=publisher,
+                source_lang=source["lang"],
             )
         )
 
@@ -451,6 +453,36 @@ def request_openrouter_summaries(
     return summaries
 
 
+def translate_title_to_chinese(title: str, source_lang: str) -> str:
+    title = clean_text(title)
+    if chinese_char_count(title) >= 6:
+        return title
+
+    language = (source_lang or "auto").strip()
+    language_pairs = [f"{language}|zh-CN"]
+    if language != "en":
+        language_pairs.append("en|zh-CN")
+
+    for langpair in language_pairs:
+        try:
+            response = requests.get(
+                "https://api.mymemory.translated.net/get",
+                params={"q": title[:450], "langpair": langpair},
+                timeout=20,
+            )
+            response.raise_for_status()
+            data = response.json()
+            translated = clean_text(
+                (data.get("responseData") or {}).get("translatedText")
+            )
+            if chinese_char_count(translated) >= 4:
+                print(f"[TITLE] Translated with {langpair}: {truncate_text(translated, 30)}")
+                return translated
+        except Exception as exc:
+            print(f"[WARN] Title translation failed ({langpair}): {exc}")
+
+    return ""
+
 def summarize_articles(articles: list[Article]) -> list[Article]:
     if not OPENROUTER_API_KEY:
         print("[WARN] OPENROUTER_API_KEY is missing; using title fallback")
@@ -492,9 +524,19 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
     if not summaries:
         print("[WARN] All free summary models failed; using title fallback")
 
+    translated_titles: dict[int, str] = {}
+    for index, article in enumerate(articles, start=1):
+        if summaries.get(index):
+            continue
+        translated = translate_title_to_chinese(article.title, article.source_lang)
+        if translated:
+            translated_titles[index] = translated
+
     summarized: list[Article] = []
     for index, article in enumerate(articles, start=1):
         summary = normalize_summary(summaries.get(index, ""), article)
+        if not summary:
+            summary = truncate_text(translated_titles.get(index, article.title), 20)
         summarized.append(replace(article, summary=summary))
     return summarized
 
@@ -542,7 +584,7 @@ def build_messages(articles: list[Article]) -> list[str]:
         )
 
     text = "\n\n".join(parts + article_blocks)
-    text += "\n\n────────────────\n说明：摘要由免费模型自动生成，重要信息请以原文为准。"
+    text += "\n\n────────────────\n说明：摘要由免费模型生成；摘要失败时显示中文标题。重要信息请以原文为准。"
 
     messages = split_text(text, 1900)
     if len(messages) > 1:
