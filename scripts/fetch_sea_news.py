@@ -38,7 +38,7 @@ def env_int(name: str, default: int) -> int:
 MAX_ITEMS = max(1, env_int("MAX_ITEMS", 30))
 MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 1))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
-DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 8))
+DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 6))
 USER_AGENT = "Mozilla/5.0 (compatible; sea-news-digest/1.0; +https://github.com/forwardok43-jpg/sea-news-digest)"
 
 DEFAULT_SUMMARY_MODELS = (
@@ -536,7 +536,7 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
     for index, article in enumerate(articles, start=1):
         summary = normalize_summary(summaries.get(index, ""), article)
         if not summary:
-            summary = truncate_text(translated_titles.get(index, article.title), 20)
+            summary = truncate_text(translated_titles.get(index, article.title), 18)
         summarized.append(replace(article, summary=summary))
     return summarized
 
@@ -579,8 +579,8 @@ def build_messages(articles: list[Article]) -> list[str]:
         article_blocks.append(
             f"【{article.region}】\n"
             f"{article.summary}\n"
-            f"来源：{source_label(article)}｜时间：{local_time}\n"
-            f"链接：{article.link}"
+            f"{source_label(article)} · {local_time}\n"
+            f"{article.link}"
         )
 
     text = "\n\n".join(parts + article_blocks)
