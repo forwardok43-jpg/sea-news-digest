@@ -25,6 +25,7 @@ WECOM_WEBHOOK_URL = os.getenv("WECOM_WEBHOOK_URL", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
+LOG_PREVIEW = os.getenv("LOG_PREVIEW", "0") == "1"
 
 
 def env_int(name: str, default: int) -> int:
@@ -116,6 +117,9 @@ def truncate_text(text: str, limit: int) -> str:
         return text
     return text[: limit - 1].rstrip() + "…"
 
+
+def chinese_char_count(text: str) -> int:
+    return len(re.findall(r"[\u4e00-\u9fff]", text))
 
 def normalize_summary(summary: str, article: Article) -> str:
     text = clean_text(summary)
@@ -356,7 +360,9 @@ def parse_summary_response(content: str) -> dict[int, str]:
             payload = json.loads(text[start : end + 1])
             summaries: dict[int, str] = {}
             for item in payload:
-                summaries[int(item["id"])] = clean_text(item.get("summary"))
+                summary = clean_text(item.get("summary"))
+                if summary and chinese_char_count(summary) >= 4:
+                    summaries[int(item["id"])] = summary
             if summaries:
                 return summaries
         except Exception:
@@ -369,9 +375,11 @@ def parse_summary_response(content: str) -> dict[int, str]:
     )
     for item_id, encoded_summary in pattern.findall(text):
         try:
-            summaries[int(item_id)] = clean_text(json.loads(f'"{encoded_summary}"'))
+            summary = clean_text(json.loads(f'"{encoded_summary}"'))
         except Exception:
-            summaries[int(item_id)] = clean_text(encoded_summary)
+            summary = clean_text(encoded_summary)
+        if summary and chinese_char_count(summary) >= 4:
+            summaries[int(item_id)] = summary
     return summaries
 
 
@@ -452,16 +460,34 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
         ]
 
     summaries: dict[int, str] = {}
+    minimum_valid = max(1, len(articles) // 2)
+
     for model in SUMMARY_MODELS:
         try:
             print(f"[SUMMARY] Trying model: {model}")
-            summaries = request_openrouter_summaries(articles, model)
-            if summaries:
-                print(f"[SUMMARY] Success with model: {model}")
+            candidate = request_openrouter_summaries(articles, model)
+            valid = {
+                item_id: summary
+                for item_id, summary in candidate.items()
+                if chinese_char_count(summary) >= 6
+            }
+            if len(valid) >= minimum_valid:
+                summaries = valid
+                print(
+                    f"[SUMMARY] Success with model: {model}; "
+                    f"valid={len(valid)}/{len(articles)}"
+                )
+                for item_id in sorted(valid)[:3]:
+                    print(f"[SUMMARY SAMPLE] {item_id}: {truncate_text(valid[item_id], 30)}")
                 break
+
+            print(
+                f"[WARN] Model returned insufficient Chinese summaries "
+                f"({len(valid)}/{len(articles)}): {model}"
+            )
         except Exception as exc:
             print(f"[WARN] Summary model failed ({model}): {exc}")
-            time.sleep(2)
+        time.sleep(2)
 
     if not summaries:
         print("[WARN] All free summary models failed; using title fallback")
@@ -570,6 +596,9 @@ def main() -> None:
     messages = build_messages(digest_articles)
     for index, message in enumerate(messages, start=1):
         print(f"[SEND] Part {index}/{len(messages)}, {len(message.encode('utf-8'))} bytes")
+
+    if LOG_PREVIEW:
+        print("\n\n--- preview ---\n\n" + "\n\n--- next message ---\n\n".join(messages))
 
     if DRY_RUN:
         print("\n\n--- message chunk ---\n\n".join(messages))
