@@ -1,19 +1,22 @@
 # SEA News Digest
 
-每天北京时间 08:00，从 Google News RSS 检索东南亚新闻，整理为简报并通过企业微信群机器人推送。
-
-简报结构：
-
-- 30 秒速览
-- 今日重点
-- 其他动态
-- 今日观察
-
-消息使用固定换行的纯文本投递，避免企业微信 Markdown 渲染器输出 `<br/>` 或导致标题粘连。
+每天北京时间 08:00，从 Google News RSS 检索东南亚重点国家新闻，抓取文章正文，生成 12～18 字简体中文摘要，并按国家汇总推送到企业微信群。
 
 ## 必需的 GitHub Secret
 
 - `WECOM_WEBHOOK_URL`
+- `OPENROUTER_API_KEY`
+
+## 免费摘要模型
+
+默认优先使用：
+
+- `qwen/qwen3.8-27b:free`
+- `google/gemma-4-31b-it:free`
+- `nvidia/nemotron-3-super-120b-a12b:free`
+- `openrouter/free`
+
+如果所有模型都不可用，则退回标题摘要。
 
 ## 手动运行
 
@@ -21,8 +24,8 @@
 
 ## 可选环境变量
 
-- `MAX_ITEMS`：最多推送条数，默认 20
-- `MAX_PER_SOURCE`：每个来源最多条数，默认 3
+- `MAX_ITEMS`：最多候选新闻数，默认 30
+- `MAX_PER_SOURCE`：每个国家最多候选数，默认 1
 - `LOOKBACK_HOURS`：新闻时间范围，默认 24 小时
-- `OVERVIEW_ITEMS`：30 秒速览条数，默认 6
-- `FOCUS_ITEMS`：今日重点条数，默认 5
+- `DIGEST_ITEMS`：最终简报国家数，默认 8
+- `SUMMARY_MODELS`：逗号分隔的免费模型列表
