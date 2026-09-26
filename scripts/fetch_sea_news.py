@@ -26,6 +26,7 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
 LOG_PREVIEW = os.getenv("LOG_PREVIEW", "0") == "1"
+ENABLE_AI_SUMMARY = os.getenv("ENABLE_AI_SUMMARY", "0") == "1"
 
 
 def env_int(name: str, default: int) -> int:
@@ -487,7 +488,7 @@ def translate_title_to_chinese(title: str, source_lang: str) -> str:
 def summarize_articles(articles: list[Article]) -> list[Article]:
     summaries: dict[int, str] = {}
 
-    if OPENROUTER_API_KEY:
+    if ENABLE_AI_SUMMARY and OPENROUTER_API_KEY:
         minimum_valid = max(1, len(articles) // 2)
         for model in SUMMARY_MODELS:
             try:
@@ -513,7 +514,7 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
                 print(f"[WARN] Summary model failed ({model}): {exc}")
             time.sleep(2)
     else:
-        print("[WARN] OPENROUTER_API_KEY is missing")
+        print("[INFO] AI content summaries are disabled; translating full titles only")
 
     translated_titles: dict[int, str] = {}
     for index, article in enumerate(articles, start=1):
@@ -627,7 +628,8 @@ def main() -> None:
     print(f"[DIGEST] Selected {len(digest_articles)} country-level articles")
 
     digest_articles = decode_google_news_links(digest_articles)
-    digest_articles = enrich_articles(digest_articles)
+    if ENABLE_AI_SUMMARY:
+        digest_articles = enrich_articles(digest_articles)
     digest_articles = summarize_articles(digest_articles)
 
     messages = build_messages(digest_articles)
