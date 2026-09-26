@@ -215,10 +215,6 @@ def pick_representative(articles: list[Article], limit: int) -> list[Article]:
     return selected
 
 
-def safe_link(link: str) -> str:
-    return link.replace("(", "%28").replace(")", "%29")
-
-
 def article_meta(article: Article) -> str:
     local_time = article.published.astimezone(TZ).strftime("%m-%d %H:%M")
     parts = [article.publisher, local_time]
@@ -233,41 +229,45 @@ def build_messages(articles: list[Article]) -> list[str]:
     remaining = [article for article in articles if article.link not in focus_links]
 
     overview_lines = [
-        f"- **{article.region}**：{truncate_text(article.title, 78)}"
+        f"• {article.region}：{truncate_text(article.title, 78)}"
         for article in overview
     ]
 
     sections: list[str] = [
-        "# 东南亚新闻简报",
-        f"**{now:%Y-%m-%d %H:%M} 北京时间**\n\n"
-        f"**范围：东盟及区域来源｜时段：过去 {LOOKBACK_HOURS} 小时｜精选 {len(articles)} 条**",
-        "## 30 秒速览\n\n" + "\n".join(overview_lines),
+        "━━━━━━━━━━━━━━",
+        "东南亚新闻简报",
+        f"{now:%Y-%m-%d %H:%M} 北京时间",
+        f"范围：东盟及区域来源｜时段：过去 {LOOKBACK_HOURS} 小时｜精选 {len(articles)} 条",
+        "━━━━━━━━━━━━━━",
+        "【30 秒速览】\n\n" + "\n".join(overview_lines),
     ]
 
-    focus_parts = ["## 今日重点"]
+    focus_parts = ["【今日重点】"]
     for index, article in enumerate(focus, start=1):
-        title = truncate_text(safe_markdown_title(article.title), 120)
+        title = truncate_text(clean_text(article.title), 120)
         focus_parts.append(
-            f"### {index}. {article.region}｜{title}\n\n"
-            f"> {article_meta(article)}\n\n"
-            f"> [查看原文]({safe_link(article.link)})"
+            f"{index}. {article.region}\n"
+            f"{title}\n"
+            f"{article_meta(article)}\n"
+            f"{article.link}"
         )
     sections.append("\n\n".join(focus_parts))
 
     if remaining:
-        other_parts = ["## 其他动态"]
+        other_parts = ["【其他动态】"]
         current_region = None
         for article in remaining:
             if article.region != current_region:
                 if current_region is not None:
                     other_parts.append("")
-                other_parts.append(f"### {article.region}")
+                other_parts.append(article.region)
                 current_region = article.region
 
-            title = truncate_text(safe_markdown_title(article.title), 110)
+            title = truncate_text(clean_text(article.title), 110)
             other_parts.append(
-                f"- [{title}]({safe_link(article.link)})"
-                f"（{article_meta(article)}）"
+                f"• {title}\n"
+                f"{article_meta(article)}\n"
+                f"{article.link}"
             )
         sections.append("\n".join(other_parts))
 
@@ -276,21 +276,26 @@ def build_messages(articles: list[Article]) -> list[str]:
     latest = max(article.published for article in articles).astimezone(TZ)
 
     sections.append(
-        "## 今日观察\n\n"
-        f"- 本期共整理 {len(articles)} 条，覆盖 {len(region_counts)} 个来源分类。\n"
-        f"- 新闻量相对集中：{top_regions}。\n"
-        f"- 最新一条发布时间：{latest:%Y-%m-%d %H:%M}（北京时间）。"
+        "【今日观察】\n\n"
+        f"• 本期共整理 {len(articles)} 条，覆盖 {len(region_counts)} 个来源分类。\n"
+        f"• 新闻量相对集中：{top_regions}。\n"
+        f"• 最新一条发布时间：{latest:%Y-%m-%d %H:%M}（北京时间）。"
     )
     sections.append(
-        "---\n\n"
-        "**说明**：本简报由新闻源自动汇总，标题和链接以原文为准。"
+        "━━━━━━━━━━━━━━\n\n"
+        "说明：本简报由新闻源自动汇总，标题和链接以原文为准。"
     )
 
-    return split_markdown("\n\n".join(sections), 3500)
+    messages = split_text("\n\n".join(sections), 1800)
+    if len(messages) > 1:
+        messages = [messages[0]] + [
+            f"东南亚新闻简报（续）\n\n{message}" for message in messages[1:]
+        ]
+    return messages
 
 
-def split_markdown(markdown: str, limit_bytes: int) -> list[str]:
-    blocks = [block.strip() for block in markdown.split("\n\n") if block.strip()]
+def split_text(text: str, limit_bytes: int) -> list[str]:
+    blocks = [block.strip() for block in text.split("\n\n") if block.strip()]
     messages: list[str] = []
     current = ""
 
@@ -307,8 +312,8 @@ def split_markdown(markdown: str, limit_bytes: int) -> list[str]:
     return messages
 
 
-def send_wecom_markdown(session: requests.Session, content: str) -> None:
-    payload = {"msgtype": "markdown", "markdown": {"content": content}}
+def send_wecom_text(session: requests.Session, content: str) -> None:
+    payload = {"msgtype": "text", "text": {"content": content}}
     last_error = None
 
     for attempt in range(3):
@@ -347,9 +352,9 @@ def main() -> None:
         return
 
     for message in messages:
-        send_wecom_markdown(session, message)
+        send_wecom_text(session, message)
 
-    print(f"Pushed {len(articles)} articles in {len(messages)} briefing messages")
+    print(f"Pushed {len(articles)} articles in {len(messages)} plain-text briefing messages")
 
 
 if __name__ == "__main__":
