@@ -13,7 +13,7 @@ permissions:
 jobs:
   push-news:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -32,11 +32,17 @@ jobs:
         env:
           WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MAX_ITEMS: "200"
           MAX_PER_SOURCE: "4"
           LOOKBACK_HOURS: "24"
           DIGEST_ITEMS: "80"
-          ENABLE_AI_SUMMARY: "0"
+          ENABLE_AI_SUMMARY: "1"
+          SUMMARY_BATCH_SIZE: "8"
+          SUMMARY_WORKERS: "2"
+          OVERVIEW_MIN_CHARS: "300"
+          OVERVIEW_MAX_CHARS: "500"
           FETCH_WORKERS: "10"
           TRANSLATE_WORKERS: "4"
         run: python scripts/fetch_sea_news.py
