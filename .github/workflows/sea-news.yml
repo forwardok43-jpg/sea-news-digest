@@ -32,6 +32,8 @@ jobs:
         env:
           WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+          PYTHONFAULTHANDLER: "1"
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MAX_ITEMS: "200"
@@ -43,6 +45,6 @@ jobs:
           SUMMARY_WORKERS: "2"
           OVERVIEW_MIN_CHARS: "300"
           OVERVIEW_MAX_CHARS: "500"
-          FETCH_WORKERS: "10"
+          FETCH_WORKERS: "6"
           TRANSLATE_WORKERS: "2"
         run: python scripts/fetch_sea_news.py
