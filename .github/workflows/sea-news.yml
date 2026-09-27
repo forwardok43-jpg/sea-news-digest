@@ -33,7 +33,7 @@ jobs:
           WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           MAX_ITEMS: "200"
-          MAX_PER_SOURCE: "3"
+          MAX_PER_SOURCE: "4"
           LOOKBACK_HOURS: "24"
           DIGEST_ITEMS: "80"
           ENABLE_AI_SUMMARY: "0"
