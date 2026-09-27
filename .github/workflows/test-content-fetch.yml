@@ -1,0 +1,38 @@
+name: Test Content Fetch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-content:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test article content extraction
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/test_content_fetch.py
+
+      - name: Upload extraction test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: content-fetch-results
+          path: content_test_results.json
+          if-no-files-found: warn
