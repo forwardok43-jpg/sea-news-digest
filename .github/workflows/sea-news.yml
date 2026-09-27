@@ -44,5 +44,5 @@ jobs:
           OVERVIEW_MIN_CHARS: "300"
           OVERVIEW_MAX_CHARS: "500"
           FETCH_WORKERS: "10"
-          TRANSLATE_WORKERS: "4"
+          TRANSLATE_WORKERS: "2"
         run: python scripts/fetch_sea_news.py
