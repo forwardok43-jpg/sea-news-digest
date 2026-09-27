@@ -11,12 +11,17 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote_plus, urlparse
+from pathlib import Path
+from urllib.parse import parse_qs, quote, quote_plus, urlparse
 from zoneinfo import ZoneInfo
 
 import feedparser
 import requests
 import trafilatura
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.shared import Cm, Pt, RGBColor
 from googlenewsdecoder import gnews_decoder_async
 
 
@@ -780,6 +785,197 @@ def build_overview(articles: list[Article]) -> str:
     )
     return overview
 
+def build_fallback_overview(articles: list[Article]) -> str:
+    if not articles:
+        return ""
+
+    entries = []
+    for article in articles[:20]:
+        country = article.source_country or article.region
+        text = article.summary or article.title_zh or article.title
+        entries.append(f"{country}：{text}")
+
+    overview = "；".join(entries)
+    if len(overview) > OVERVIEW_MAX_CHARS:
+        cutoff = overview[:OVERVIEW_MAX_CHARS]
+        boundary = max(cutoff.rfind("；"), cutoff.rfind("。"))
+        overview = cutoff[: boundary + 1] if boundary > 0 else cutoff.rstrip() + "。"
+    return overview
+
+
+def configure_docx(document: Document) -> None:
+    section = document.sections[0]
+    section.top_margin = Cm(2.2)
+    section.bottom_margin = Cm(2.2)
+    section.left_margin = Cm(2.4)
+    section.right_margin = Cm(2.4)
+
+    normal = document.styles["Normal"]
+    normal.font.name = "Microsoft YaHei"
+    normal.font.size = Pt(10.5)
+    normal._element.get_or_add_rPr().get_or_add_rFonts().set(
+        qn("w:eastAsia"), "Microsoft YaHei"
+    )
+
+
+def add_docx_run(
+    paragraph,
+    text: str,
+    *,
+    bold: bool = False,
+    size: float = 10.5,
+    color: tuple[int, int, int] | None = None,
+) -> None:
+    run = paragraph.add_run(text)
+    run.bold = bold
+    run.font.name = "Microsoft YaHei"
+    run.font.size = Pt(size)
+    run._element.get_or_add_rPr().get_or_add_rFonts().set(
+        qn("w:eastAsia"), "Microsoft YaHei"
+    )
+    if color:
+        run.font.color.rgb = RGBColor(*color)
+
+
+def create_overview_docx(
+    overview: str,
+    articles: list[Article],
+    output_dir: Path,
+) -> Path:
+    now = datetime.now(TZ)
+    document = Document()
+    configure_docx(document)
+
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    add_docx_run(title, "今日东盟新闻总览", bold=True, size=18)
+
+    meta = document.add_paragraph()
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    add_docx_run(
+        meta,
+        f"{now:%Y-%m-%d}｜覆盖 {len(articles)} 条新闻摘要",
+        size=10,
+        color=(90, 90, 90),
+    )
+
+    body = document.add_paragraph()
+    body.paragraph_format.line_spacing = 1.5
+    body.paragraph_format.space_before = Pt(10)
+    add_docx_run(body, overview, size=11)
+
+    path = output_dir / f"今日东盟新闻总览_{now:%Y-%m-%d}.docx"
+    document.save(path)
+    return path
+
+
+def create_news_compilation_docx(
+    articles: list[Article],
+    output_dir: Path,
+) -> Path:
+    now = datetime.now(TZ)
+    document = Document()
+    configure_docx(document)
+
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    add_docx_run(title, "东盟新闻摘要汇编", bold=True, size=18)
+
+    meta = document.add_paragraph()
+    meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    add_docx_run(
+        meta,
+        f"{now:%Y-%m-%d %H:%M} 北京时间｜共 {len(articles)} 条",
+        size=10,
+        color=(90, 90, 90),
+    )
+
+    for index, article in enumerate(articles, start=1):
+        heading = document.add_paragraph()
+        heading.paragraph_format.space_before = Pt(12)
+        heading.paragraph_format.space_after = Pt(4)
+        add_docx_run(
+            heading,
+            f"{index}. {article.region}｜{article.title_zh or article.title}",
+            bold=True,
+            size=12,
+        )
+
+        source_line = document.add_paragraph()
+        source_line.paragraph_format.space_after = Pt(3)
+        add_docx_run(
+            source_line,
+            f"出处国家/地区：{article.source_country or article.region}｜"
+            f"来源：{source_label(article)}｜"
+            f"时间：{article.published.astimezone(TZ):%Y-%m-%d %H:%M}",
+            size=9,
+            color=(100, 100, 100),
+        )
+
+        summary_line = document.add_paragraph()
+        summary_line.paragraph_format.line_spacing = 1.35
+        if article.summary:
+            add_docx_run(summary_line, f"摘要：{article.summary}", size=10.5)
+        else:
+            add_docx_run(
+                summary_line,
+                "摘要：正文摘要暂未生成，请以中文标题为准。",
+                size=10.5,
+                color=(150, 70, 0),
+            )
+
+    path = output_dir / f"东盟新闻摘要汇编_{now:%Y-%m-%d}.docx"
+    document.save(path)
+    return path
+
+
+def upload_wecom_file(session: requests.Session, path: Path) -> str:
+    query = parse_qs(urlparse(WECOM_WEBHOOK_URL).query)
+    key = (query.get("key") or [""])[0]
+    if not key:
+        raise RuntimeError("WECOM_WEBHOOK_URL does not contain key")
+
+    upload_url = (
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media"
+        f"?key={quote(key)}&type=file"
+    )
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            with path.open("rb") as handle:
+                response = session.post(
+                    upload_url,
+                    files={
+                        "media": (
+                            path.name,
+                            handle,
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        )
+                    },
+                    timeout=(10, 90),
+                )
+            response.raise_for_status()
+            data = response.json()
+            if data.get("errcode") != 0 or not data.get("media_id"):
+                raise RuntimeError(f"WeCom upload error: {data}")
+            return data["media_id"]
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+
+    raise RuntimeError(f"Failed to upload Word document: {path.name}") from last_error
+
+
+def send_wecom_file(session: requests.Session, media_id: str, filename: str) -> None:
+    payload = {"msgtype": "file", "file": {"media_id": media_id}}
+    response = session.post(WECOM_WEBHOOK_URL, json=payload, timeout=30)
+    response.raise_for_status()
+    data = response.json()
+    if data.get("errcode") != 0:
+        raise RuntimeError(f"WeCom file message error for {filename}: {data}")
+
 def source_label(article: Article) -> str:
     if article.publisher:
         return article.publisher
@@ -878,45 +1074,32 @@ def main() -> None:
     digest_articles = summarize_articles(digest_articles)
 
     overview = build_overview(digest_articles) if ENABLE_AI_SUMMARY else ""
-    messages = build_messages(digest_articles)
+    if not overview:
+        overview = build_fallback_overview(digest_articles)
 
-    for index, message in enumerate(messages, start=1):
-        print(
-            f"[SEND DETAIL] Part {index}/{len(messages)}, "
-            f"{len(message.encode('utf-8'))} bytes"
-        )
+    output_dir = Path("output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    overview_path = create_overview_docx(overview, digest_articles, output_dir)
+    compilation_path = create_news_compilation_docx(digest_articles, output_dir)
+    output_files = [overview_path, compilation_path]
 
-    if overview:
-        overview_message = f"【今日东盟新闻总览】\n\n{overview}"
-        print(
-            f"[SEND OVERVIEW] {len(overview_message.encode('utf-8'))} bytes, "
-            f"{chinese_char_count(overview)} Chinese characters"
-        )
-    else:
-        overview_message = ""
-        print("[WARN] No overview generated; sending detailed digest only")
-
-    if LOG_PREVIEW:
-        if overview_message:
-            print("\n\n--- overview preview ---\n\n" + overview_message)
-        print("\n\n--- detail preview ---\n\n" + "\n\n--- next message ---\n\n".join(messages))
+    for path in output_files:
+        print(f"[DOCX] {path} ({path.stat().st_size} bytes)")
 
     if DRY_RUN:
-        if overview_message:
-            print("\n\n" + overview_message)
-        print("\n\n--- detailed digest ---\n\n" + "\n\n--- next message ---\n\n".join(messages))
+        print("[DRY RUN] Word documents generated but not sent")
         return
 
-    if overview_message:
-        send_wecom_text(session, overview_message)
+    system_session = requests.Session()
+    system_session.headers.update({"User-Agent": USER_AGENT})
 
-    for message in messages:
-        send_wecom_text(session, message)
+    for path in output_files:
+        media_id = upload_wecom_file(system_session, path)
+        send_wecom_file(system_session, media_id, path.name)
+        print(f"[SEND FILE] {path.name}")
+        time.sleep(2)
 
-    print(
-        f"Pushed overview={bool(overview_message)} and "
-        f"{len(digest_articles)} detailed summaries in {len(messages)} message(s)"
-    )
+    print("Pushed 2 Word documents: 1 overview and 1 news-summary compilation")
 
 
 if __name__ == "__main__":
