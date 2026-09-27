@@ -58,7 +58,7 @@ jobs:
           DIGEST_ITEMS: ${{ github.event_name == 'workflow_dispatch' && inputs.digest_items || '80' }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true && '1' || '0' }}
           ENABLE_AI_SUMMARY: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_ai_summary == false && '0' || '1' }}
-          SUMMARY_BATCH_SIZE: "8"
+          SUMMARY_BATCH_SIZE: "10"
           SUMMARY_WORKERS: "2"
           OVERVIEW_MIN_CHARS: "300"
           OVERVIEW_MAX_CHARS: "500"
