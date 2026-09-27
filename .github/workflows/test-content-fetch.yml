@@ -24,6 +24,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Compile Python scripts
+        run: python -m py_compile scripts/fetch_sea_news.py scripts/test_content_fetch.py
+
       - name: Test article content extraction
         env:
           PYTHONUNBUFFERED: "1"
