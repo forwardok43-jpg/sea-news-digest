@@ -8,7 +8,7 @@ import json
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus, urlparse
@@ -27,6 +27,8 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
 LOG_PREVIEW = os.getenv("LOG_PREVIEW", "0") == "1"
 ENABLE_AI_SUMMARY = os.getenv("ENABLE_AI_SUMMARY", "0") == "1"
+FETCH_WORKERS = max(1, env_int("FETCH_WORKERS", 10))
+TRANSLATE_WORKERS = max(1, env_int("TRANSLATE_WORKERS", 4))
 
 
 def env_int(name: str, default: int) -> int:
@@ -36,10 +38,10 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
-MAX_ITEMS = max(1, env_int("MAX_ITEMS", 30))
-MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 2))
+MAX_ITEMS = max(1, env_int("MAX_ITEMS", 200))
+MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 3))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
-DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 20))
+DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 80))
 USER_AGENT = "Mozilla/5.0 (compatible; sea-news-digest/1.0; +https://github.com/forwardok43-jpg/sea-news-digest)"
 SOCIAL_DOMAINS = ("facebook.com", "instagram.com", "x.com", "twitter.com", "youtube.com", "tiktok.com")
 
@@ -58,35 +60,68 @@ SUMMARY_MODELS = [
     if item.strip()
 ]
 
-PRIORITY_REGIONS = [
-    "印度尼西亚",
-    "越南",
-    "泰国",
-    "菲律宾",
-    "马来西亚",
-    "新加坡",
-    "柬埔寨",
-    "缅甸",
-    "老挝",
-    "文莱",
-    "东帝汶",
+COUNTRIES = [
+    ("🇮🇩 印度尼西亚", "Indonesia", "id", "ID"),
+    ("🇻🇳 越南", "Vietnam", "vi", "VN"),
+    ("🇹🇭 泰国", "Thailand", "th", "TH"),
+    ("🇵🇭 菲律宾", "Philippines", "en", "PH"),
+    ("🇲🇾 马来西亚", "Malaysia", "ms", "MY"),
+    ("🇸🇬 新加坡", "Singapore", "en", "SG"),
+    ("🇰🇭 柬埔寨", "Cambodia", "km", "KH"),
+    ("🇲🇲 缅甸", "Myanmar", "my", "MM"),
+    ("🇱🇦 老挝", "Laos", "lo", "LA"),
+    ("🇧🇳 文莱", "Brunei", "en", "BN"),
+    ("🇹🇱 东帝汶", "Timor-Leste", "pt", "TL"),
 ]
 
-SOURCES = [
-    {"name": "🌏 东盟区域", "query": "ASEAN OR Southeast Asia", "lang": "en", "country": "SG"},
-    {"name": "🇮🇩 印度尼西亚", "query": "Indonesia OR Jakarta", "lang": "id", "country": "ID"},
-    {"name": "🇻🇳 越南", "query": "Việt Nam OR Hà Nội", "lang": "vi", "country": "VN"},
-    {"name": "🇹🇭 泰国", "query": "ประเทศไทย OR กรุงเทพ", "lang": "th", "country": "TH"},
-    {"name": "🇵🇭 菲律宾", "query": "Philippines OR Manila", "lang": "en", "country": "PH"},
-    {"name": "🇲🇾 马来西亚", "query": "Malaysia OR Kuala Lumpur", "lang": "ms", "country": "MY"},
-    {"name": "🇸🇬 新加坡", "query": "Singapore", "lang": "en", "country": "SG"},
-    {"name": "🇰🇭 柬埔寨", "query": "Cambodia OR Phnom Penh", "lang": "km", "country": "KH"},
-    {"name": "🇲🇲 缅甸", "query": "Myanmar OR Yangon", "lang": "my", "country": "MM"},
-    {"name": "🇱🇦 老挝", "query": "Laos OR Vientiane", "lang": "lo", "country": "LA"},
-    {"name": "🇧🇳 文莱", "query": "Brunei OR Bandar Seri Begawan", "lang": "en", "country": "BN"},
-    {"name": "🇹🇱 东帝汶", "query": "Timor-Leste OR Dili", "lang": "pt", "country": "TL"},
-]
+SOURCES: list[dict] = []
 
+for display_name, search_name, lang, country in COUNTRIES:
+    SOURCES.append(
+        {
+            "name": f"{display_name}·政治安全",
+            "query": f"{search_name} politics OR election OR parliament OR military OR defense",
+            "lang": lang,
+            "country": country,
+        }
+    )
+    SOURCES.append(
+        {
+            "name": f"{display_name}·经济产业",
+            "query": f"{search_name} economy OR trade OR investment OR infrastructure",
+            "lang": lang,
+            "country": country,
+        }
+    )
+
+SOURCES.extend(
+    [
+        {"name": "🤝 东盟中国关系", "query": "ASEAN China relations OR summit OR cooperation", "lang": "en", "country": "SG"},
+        {"name": "🤝 东盟美国关系", "query": "ASEAN United States relations OR summit OR defense", "lang": "en", "country": "SG"},
+        {"name": "🤝 东盟日本关系", "query": "ASEAN Japan relations OR summit OR cooperation", "lang": "en", "country": "SG"},
+        {"name": "🤝 东盟欧盟关系", "query": "ASEAN European Union relations OR summit OR trade", "lang": "en", "country": "SG"},
+        {"name": "🤝 东盟印度关系", "query": "ASEAN India relations OR summit OR cooperation", "lang": "en", "country": "SG"},
+        {"name": "🤝 东盟韩国关系", "query": "ASEAN South Korea relations OR summit OR cooperation", "lang": "en", "country": "SG"},
+        {"name": "🤝 东盟澳新关系", "query": "ASEAN Australia OR New Zealand relations OR summit", "lang": "en", "country": "SG"},
+        {"name": "🤝 东盟俄罗斯关系", "query": "ASEAN Russia relations OR summit OR cooperation", "lang": "en", "country": "SG"},
+        {"name": "🛡️ 东盟地区安全", "query": "ASEAN regional security OR South China Sea OR military exercise", "lang": "en", "country": "SG"},
+        {"name": "🌏 东盟峰会与双边关系", "query": "ASEAN summit OR bilateral relations OR regional cooperation", "lang": "en", "country": "SG"},
+        {"name": "🇨🇳 中国政治外交", "query": "China foreign policy OR diplomacy OR military OR Asia", "lang": "zh", "country": "CN"},
+        {"name": "🇨🇳 中国经济贸易", "query": "China economy OR trade OR investment OR supply chain", "lang": "zh", "country": "CN"},
+        {"name": "🇺🇸 美国亚太政策", "query": "United States Indo-Pacific OR Asia OR ASEAN OR defense", "lang": "en", "country": "US"},
+        {"name": "🇺🇸 美国经济贸易", "query": "United States economy OR trade policy OR tariffs", "lang": "en", "country": "US"},
+        {"name": "🇪🇺 欧盟经济外交", "query": "European Union economy OR trade OR foreign policy", "lang": "en", "country": "GB"},
+        {"name": "🇯🇵 日本经济安全", "query": "Japan economy OR defense OR foreign policy", "lang": "en", "country": "JP"},
+        {"name": "🇰🇷 韩国经济安全", "query": "South Korea economy OR defense OR foreign policy", "lang": "en", "country": "KR"},
+        {"name": "🇮🇳 印度经济安全", "query": "India economy OR defense OR foreign policy", "lang": "en", "country": "IN"},
+        {"name": "🇷🇺 俄罗斯亚太政策", "query": "Russia Asia OR ASEAN OR Indo-Pacific OR energy", "lang": "en", "country": "RU"},
+        {"name": "🌐 全球经济与贸易", "query": "global economy OR inflation OR interest rates OR international trade", "lang": "en", "country": "US"},
+        {"name": "🌐 东盟官方", "url": "https://asean.org/feed/", "lang": "en", "country": "SG"},
+        {"name": "🌐 东亚论坛", "url": "https://eastasiaforum.org/feed/", "lang": "en", "country": "SG"},
+        {"name": "🌐 The Diplomat", "url": "https://thediplomat.com/feed/", "lang": "en", "country": "SG"},
+        {"name": "🌐 BenarNews", "url": "https://www.benarnews.org/english/rss/", "lang": "en", "country": "SG"},
+    ]
+)
 
 @dataclass(frozen=True)
 class Article:
@@ -176,7 +211,7 @@ def entry_publisher(entry) -> str:
 
 
 def fetch_source(session: requests.Session, source: dict) -> list[Article]:
-    url = build_google_news_url(source["query"], source["lang"], source["country"])
+    url = source.get("url") or build_google_news_url(source["query"], source.get("lang", "en"), source.get("country", "US"))
     feed = get_feed(session, url)
 
     if getattr(feed, "bozo", False):
@@ -205,7 +240,7 @@ def fetch_source(session: requests.Session, source: dict) -> list[Article]:
                 link=link,
                 published=published,
                 publisher=publisher,
-                source_lang=source["lang"],
+                source_lang=source.get("lang", "en"),
             )
         )
 
@@ -221,15 +256,23 @@ def collect_articles(session: requests.Session):
     articles: list[Article] = []
     failures: list[str] = []
 
-    for source in SOURCES:
-        try:
-            items = fetch_source(session, source)
-            print(f"[OK] {source['name']}: {len(items)}")
-            articles.extend(items)
-        except Exception as exc:
-            message = f"{source['name']}: {exc}"
-            print(f"[FAIL] {message}")
-            failures.append(message)
+    def worker(source: dict):
+        local_session = requests.Session()
+        local_session.headers.update({"User-Agent": USER_AGENT})
+        return source, fetch_source(local_session, source)
+
+    with ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(SOURCES))) as executor:
+        futures = {executor.submit(worker, source): source for source in SOURCES}
+        for future in as_completed(futures):
+            source = futures[future]
+            try:
+                _, items = future.result()
+                print(f"[OK] {source['name']}: {len(items)}")
+                articles.extend(items)
+            except Exception as exc:
+                message = f"{source['name']}: {exc}"
+                print(f"[FAIL] {message}")
+                failures.append(message)
 
     articles.sort(key=lambda item: item.published, reverse=True)
     unique_articles: list[Article] = []
@@ -244,30 +287,26 @@ def collect_articles(session: requests.Session):
 
     return unique_articles[:MAX_ITEMS], failures
 
-
 def select_digest_articles(articles: list[Article], limit: int) -> list[Article]:
+    grouped: dict[str, list[Article]] = {source["name"]: [] for source in SOURCES}
+
+    for article in sorted(articles, key=lambda item: item.published, reverse=True):
+        grouped.setdefault(article.region, []).append(article)
+
     selected: list[Article] = []
-    selected_links: set[str] = set()
-
-    for region in PRIORITY_REGIONS:
-        candidates = [article for article in articles if region in article.region]
-        if not candidates:
-            continue
-        article = max(candidates, key=lambda item: item.published)
-        selected.append(article)
-        selected_links.add(article.link)
-        if len(selected) >= limit:
-            return selected
-
-    for article in articles:
-        if article.link in selected_links:
-            continue
-        selected.append(article)
-        if len(selected) >= limit:
+    while len(selected) < limit:
+        made_progress = False
+        for region in grouped:
+            if not grouped[region]:
+                continue
+            selected.append(grouped[region].pop(0))
+            made_progress = True
+            if len(selected) >= limit:
+                break
+        if not made_progress:
             break
 
     return selected
-
 
 def decode_google_news_links(articles: list[Article]) -> list[Article]:
     pending = [article for article in articles if "news.google.com" in article.link]
@@ -520,10 +559,25 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
         print("[INFO] AI content summaries are disabled; translating full titles only")
 
     translated_titles: dict[int, str] = {}
-    for index, article in enumerate(articles, start=1):
-        translated = translate_title_to_chinese(article.title, article.source_lang)
-        if translated:
-            translated_titles[index] = translated
+    with ThreadPoolExecutor(
+        max_workers=max(1, min(TRANSLATE_WORKERS, len(articles)))
+    ) as executor:
+        futures = {
+            executor.submit(
+                translate_title_to_chinese,
+                article.title,
+                article.source_lang,
+            ): index
+            for index, article in enumerate(articles, start=1)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                translated = future.result()
+                if translated:
+                    translated_titles[index] = translated
+            except Exception as exc:
+                print(f"[WARN] Title translation worker failed: {exc}")
 
     summarized: list[Article] = []
     for index, article in enumerate(articles, start=1):
