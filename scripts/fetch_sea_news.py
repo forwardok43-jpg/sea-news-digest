@@ -27,8 +27,6 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
 LOG_PREVIEW = os.getenv("LOG_PREVIEW", "0") == "1"
 ENABLE_AI_SUMMARY = os.getenv("ENABLE_AI_SUMMARY", "0") == "1"
-FETCH_WORKERS = max(1, env_int("FETCH_WORKERS", 10))
-TRANSLATE_WORKERS = max(1, env_int("TRANSLATE_WORKERS", 4))
 
 
 def env_int(name: str, default: int) -> int:
@@ -38,6 +36,8 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+FETCH_WORKERS = max(1, env_int("FETCH_WORKERS", 10))
+TRANSLATE_WORKERS = max(1, env_int("TRANSLATE_WORKERS", 4))
 MAX_ITEMS = max(1, env_int("MAX_ITEMS", 200))
 MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 3))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
