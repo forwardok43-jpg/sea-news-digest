@@ -61,84 +61,72 @@ SUMMARY_MODELS = [
 ]
 
 COUNTRIES = [
-    ("🇮🇩 印度尼西亚", "Indonesia", "id", "ID"),
-    ("🇻🇳 越南", "Vietnam", "vi", "VN"),
-    ("🇹🇭 泰国", "Thailand", "th", "TH"),
-    ("🇵🇭 菲律宾", "Philippines", "en", "PH"),
-    ("🇲🇾 马来西亚", "Malaysia", "ms", "MY"),
-    ("🇸🇬 新加坡", "Singapore", "en", "SG"),
-    ("🇰🇭 柬埔寨", "Cambodia", "km", "KH"),
-    ("🇲🇲 缅甸", "Myanmar", "my", "MM"),
-    ("🇱🇦 老挝", "Laos", "lo", "LA"),
-    ("🇧🇳 文莱", "Brunei", "en", "BN"),
-    ("🇹🇱 东帝汶", "Timor-Leste", "pt", "TL"),
+    ("🇮🇩", "印度尼西亚", "Indonesia", "id", "ID"),
+    ("🇻🇳", "越南", "Vietnam", "vi", "VN"),
+    ("🇹🇭", "泰国", "Thailand", "th", "TH"),
+    ("🇵🇭", "菲律宾", "Philippines", "en", "PH"),
+    ("🇲🇾", "马来西亚", "Malaysia", "ms", "MY"),
+    ("🇸🇬", "新加坡", "Singapore", "en", "SG"),
+    ("🇰🇭", "柬埔寨", "Cambodia", "km", "KH"),
+    ("🇲🇲", "缅甸", "Myanmar", "my", "MM"),
+    ("🇱🇦", "老挝", "Laos", "lo", "LA"),
+    ("🇧🇳", "文莱", "Brunei", "en", "BN"),
+    ("🇹🇱", "东帝汶", "Timor-Leste", "pt", "TL"),
 ]
 
 SOURCES: list[dict] = []
 
-for display_name, search_name, lang, country in COUNTRIES:
+for flag, name_zh, search_name, lang, country_code in COUNTRIES:
     SOURCES.append(
         {
-            "name": f"{display_name}·政治安全",
+            "name": f"{flag} {name_zh}｜政治安全",
             "query": f"{search_name} politics OR election OR parliament OR military OR defense",
             "lang": lang,
-            "country": country,
+            "country": country_code,
+            "source_country": name_zh,
         }
     )
     SOURCES.append(
         {
-            "name": f"{display_name}·经济产业",
+            "name": f"{flag} {name_zh}｜经济产业",
             "query": f"{search_name} economy OR trade OR investment OR infrastructure",
             "lang": lang,
-            "country": country,
+            "country": country_code,
+            "source_country": name_zh,
         }
     )
     SOURCES.append(
         {
-            "name": f"{display_name}·综合热点",
+            "name": f"{flag} {name_zh}｜综合热点",
             "query": search_name,
             "lang": lang,
-            "country": country,
+            "country": country_code,
+            "source_country": name_zh,
         }
     )
 
 SOURCES.extend(
     [
-        {"name": "🤝 东盟中国关系", "query": "ASEAN China relations OR summit OR cooperation", "lang": "en", "country": "SG"},
-        {"name": "🤝 东盟美国关系", "query": "ASEAN United States relations OR summit OR defense", "lang": "en", "country": "SG"},
-        {"name": "🤝 东盟日本关系", "query": "ASEAN Japan relations OR summit OR cooperation", "lang": "en", "country": "SG"},
-        {"name": "🤝 东盟欧盟关系", "query": "ASEAN European Union relations OR summit OR trade", "lang": "en", "country": "SG"},
-        {"name": "🤝 东盟印度关系", "query": "ASEAN India relations OR summit OR cooperation", "lang": "en", "country": "SG"},
-        {"name": "🤝 东盟韩国关系", "query": "ASEAN South Korea relations OR summit OR cooperation", "lang": "en", "country": "SG"},
-        {"name": "🤝 东盟澳新关系", "query": "ASEAN Australia OR New Zealand relations OR summit", "lang": "en", "country": "SG"},
-        {"name": "🤝 东盟俄罗斯关系", "query": "ASEAN Russia relations OR summit OR cooperation", "lang": "en", "country": "SG"},
-        {"name": "🛡️ 东盟地区安全", "query": "ASEAN regional security OR South China Sea OR military exercise", "lang": "en", "country": "SG"},
-        {"name": "🌏 东盟峰会与双边关系", "query": "ASEAN summit OR bilateral relations OR regional cooperation", "lang": "en", "country": "SG"},
-        {"name": "🇨🇳 中国政治外交", "query": "China foreign policy OR diplomacy OR military OR Asia", "lang": "zh", "country": "CN"},
-        {"name": "🇨🇳 中国经济贸易", "query": "China economy OR trade OR investment OR supply chain", "lang": "zh", "country": "CN"},
-        {"name": "🇺🇸 美国亚太政策", "query": "United States Indo-Pacific OR Asia OR ASEAN OR defense", "lang": "en", "country": "US"},
-        {"name": "🇺🇸 美国经济贸易", "query": "United States economy OR trade policy OR tariffs", "lang": "en", "country": "US"},
-        {"name": "🇪🇺 欧盟经济外交", "query": "European Union economy OR trade OR foreign policy", "lang": "en", "country": "GB"},
-        {"name": "🇯🇵 日本经济安全", "query": "Japan economy OR defense OR foreign policy", "lang": "en", "country": "JP"},
-        {"name": "🇰🇷 韩国经济安全", "query": "South Korea economy OR defense OR foreign policy", "lang": "en", "country": "KR"},
-        {"name": "🇮🇳 印度经济安全", "query": "India economy OR defense OR foreign policy", "lang": "en", "country": "IN"},
-        {"name": "🇷🇺 俄罗斯亚太政策", "query": "Russia Asia OR ASEAN OR Indo-Pacific OR energy", "lang": "en", "country": "RU"},
-        {"name": "🌐 全球经济与贸易", "query": "global economy OR inflation OR interest rates OR international trade", "lang": "en", "country": "US"},
-        {"name": "🌐 东盟官方", "url": "https://asean.org/feed/", "lang": "en", "country": "SG"},
-        {"name": "🌐 东亚论坛", "url": "https://eastasiaforum.org/feed/", "lang": "en", "country": "SG"},
-        {"name": "🌐 The Diplomat", "url": "https://thediplomat.com/feed/", "lang": "en", "country": "SG"},
-        {"name": "🌐 BenarNews", "url": "https://www.benarnews.org/english/rss/", "lang": "en", "country": "SG"},
-    ]
-)
-
-SOURCES.extend(
-    [
-        {"name": "🤝 东盟经贸合作", "query": "ASEAN trade OR investment OR supply chain OR digital economy", "lang": "en", "country": "SG"},
-        {"name": "🛡️ 东盟防务军事", "query": "ASEAN defense OR military OR South China Sea OR arms", "lang": "en", "country": "SG"},
-        {"name": "🤝 中国东盟经贸安全", "query": "China ASEAN trade OR investment OR infrastructure OR security", "lang": "en", "country": "SG"},
-        {"name": "🇺🇸 美中经贸科技", "query": "United States China trade OR tariffs OR semiconductors OR technology", "lang": "en", "country": "US"},
-        {"name": "🇯🇵 日本韩国中国关系", "query": "Japan OR South Korea China relations OR Asia security OR economy", "lang": "en", "country": "JP"},
-        {"name": "🇪🇺 欧盟中国与印太", "query": "European Union China trade OR supply chain OR Indo-Pacific", "lang": "en", "country": "GB"},
+        {"name": "🌐 中国—东盟关系", "query": "China ASEAN relations OR summit OR trade OR security", "lang": "en", "country": "SG", "source_country": "中国—东盟", "require_asean": True},
+        {"name": "🌐 美国—东盟关系", "query": "United States ASEAN relations OR summit OR defense OR trade", "lang": "en", "country": "SG", "source_country": "美国—东盟", "require_asean": True},
+        {"name": "🌐 日本—东盟关系", "query": "Japan ASEAN relations OR summit OR trade OR security", "lang": "en", "country": "SG", "source_country": "日本—东盟", "require_asean": True},
+        {"name": "🌐 欧盟—东盟关系", "query": "European Union ASEAN relations OR summit OR trade OR investment", "lang": "en", "country": "SG", "source_country": "欧盟—东盟", "require_asean": True},
+        {"name": "🌐 印度—东盟关系", "query": "India ASEAN relations OR summit OR trade OR security", "lang": "en", "country": "SG", "source_country": "印度—东盟", "require_asean": True},
+        {"name": "🌐 韩国—东盟关系", "query": "South Korea ASEAN relations OR summit OR trade OR investment", "lang": "en", "country": "SG", "source_country": "韩国—东盟", "require_asean": True},
+        {"name": "🌐 俄罗斯—东盟关系", "query": "Russia ASEAN relations OR summit OR energy OR defense", "lang": "en", "country": "SG", "source_country": "俄罗斯—东盟", "require_asean": True},
+        {"name": "🌐 澳新—东盟关系", "query": "Australia OR New Zealand ASEAN relations OR summit OR defense", "lang": "en", "country": "SG", "source_country": "澳大利亚/新西兰—东盟", "require_asean": True},
+        {"name": "🤝 东盟内部双边关系", "query": "ASEAN bilateral relations OR cooperation OR dispute OR summit", "lang": "en", "country": "SG", "source_country": "东盟内部", "require_asean": True},
+        {"name": "🛡️ 东盟安全与南中国海", "query": "ASEAN security OR South China Sea OR military exercise OR defense", "lang": "en", "country": "SG", "source_country": "东盟地区安全", "require_asean": True},
+        {"name": "🤝 中国与东南亚经贸安全", "query": "China Southeast Asia trade OR investment OR infrastructure OR security", "lang": "en", "country": "SG", "source_country": "中国—东南亚", "require_asean": True},
+        {"name": "🛡️ 美国印太与东南亚", "query": "United States Indo-Pacific Southeast Asia defense OR trade OR alliance", "lang": "en", "country": "SG", "source_country": "美国—东南亚", "require_asean": True},
+        {"name": "💼 欧盟与东南亚经贸", "query": "European Union Southeast Asia trade OR investment OR supply chain", "lang": "en", "country": "SG", "source_country": "欧盟—东南亚", "require_asean": True},
+        {"name": "🛡️ 日本与东南亚安全经济", "query": "Japan Southeast Asia security OR economy OR investment OR defense", "lang": "en", "country": "SG", "source_country": "日本—东南亚", "require_asean": True},
+        {"name": "💼 韩国与东南亚合作", "query": "South Korea Southeast Asia trade OR investment OR cooperation", "lang": "en", "country": "SG", "source_country": "韩国—东南亚", "require_asean": True},
+        {"name": "🛡️ 印度与东南亚关系", "query": "India Southeast Asia trade OR security OR Indo-Pacific OR ASEAN", "lang": "en", "country": "SG", "source_country": "印度—东南亚", "require_asean": True},
+        {"name": "🛡️ 俄罗斯与东南亚关系", "query": "Russia Southeast Asia energy OR defense OR ASEAN", "lang": "en", "country": "SG", "source_country": "俄罗斯—东南亚", "require_asean": True},
+        {"name": "🌐 全球经济与东盟", "query": "global economy OR trade OR supply chain OR investment ASEAN Southeast Asia", "lang": "en", "country": "SG", "source_country": "全球—东盟", "require_asean": True},
+        {"name": "🌐 东盟官方", "url": "https://asean.org/feed/", "lang": "en", "country": "SG", "source_country": "东盟官方", "require_asean": True},
+        {"name": "🌐 The Diplomat", "url": "https://thediplomat.com/feed/", "lang": "en", "country": "SG", "source_country": "亚太地区", "require_asean": True},
     ]
 )
 
@@ -149,6 +137,7 @@ class Article:
     link: str
     published: datetime
     publisher: str
+    source_country: str = ""
     source_lang: str = ""
     content: str = ""
     summary: str = ""
@@ -229,6 +218,27 @@ def entry_publisher(entry) -> str:
     return clean_text(getattr(source, "title", ""))
 
 
+def is_asean_related(title: str) -> bool:
+    value = title.casefold()
+    terms = (
+        "asean",
+        "southeast asia",
+        "south china sea",
+        "indonesia",
+        "vietnam",
+        "thailand",
+        "philippines",
+        "malaysia",
+        "singapore",
+        "cambodia",
+        "myanmar",
+        "laos",
+        "brunei",
+        "timor-leste",
+        "mekong",
+    )
+    return any(term in value for term in terms)
+
 def fetch_source(session: requests.Session, source: dict) -> list[Article]:
     url = source.get("url") or build_google_news_url(source["query"], source.get("lang", "en"), source.get("country", "US"))
     feed = get_feed(session, url)
@@ -251,6 +261,8 @@ def fetch_source(session: requests.Session, source: dict) -> list[Article]:
             continue
         if any(domain in publisher.casefold() for domain in SOCIAL_DOMAINS):
             continue
+        if source.get("require_asean") and not is_asean_related(title):
+            continue
 
         articles.append(
             Article(
@@ -259,6 +271,7 @@ def fetch_source(session: requests.Session, source: dict) -> list[Article]:
                 link=link,
                 published=published,
                 publisher=publisher,
+                source_country=source.get("source_country", source.get("name", "")),
                 source_lang=source.get("lang", "en"),
             )
         )
@@ -650,7 +663,8 @@ def build_messages(articles: list[Article]) -> list[str]:
         block = f"【{article.region}】\n{title}"
         if article.summary and article.summary != title:
             block += f"\n摘要：{article.summary}"
-        block += f"\n{source_label(article)} · {local_time}"
+        origin = article.source_country or article.region
+        block += f"\n出处国家/地区：{origin}\n来源：{source_label(article)} · {local_time}"
         article_blocks.append(block)
 
     text = "\n\n".join(parts + article_blocks)
