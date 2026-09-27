@@ -39,7 +39,7 @@ def env_int(name: str, default: int) -> int:
 FETCH_WORKERS = max(1, env_int("FETCH_WORKERS", 10))
 TRANSLATE_WORKERS = max(1, env_int("TRANSLATE_WORKERS", 4))
 MAX_ITEMS = max(1, env_int("MAX_ITEMS", 200))
-MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 3))
+MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 4))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
 DIGEST_ITEMS = max(3, env_int("DIGEST_ITEMS", 80))
 USER_AGENT = "Mozilla/5.0 (compatible; sea-news-digest/1.0; +https://github.com/forwardok43-jpg/sea-news-digest)"
@@ -93,6 +93,14 @@ for display_name, search_name, lang, country in COUNTRIES:
             "country": country,
         }
     )
+    SOURCES.append(
+        {
+            "name": f"{display_name}·综合热点",
+            "query": search_name,
+            "lang": lang,
+            "country": country,
+        }
+    )
 
 SOURCES.extend(
     [
@@ -120,6 +128,17 @@ SOURCES.extend(
         {"name": "🌐 东亚论坛", "url": "https://eastasiaforum.org/feed/", "lang": "en", "country": "SG"},
         {"name": "🌐 The Diplomat", "url": "https://thediplomat.com/feed/", "lang": "en", "country": "SG"},
         {"name": "🌐 BenarNews", "url": "https://www.benarnews.org/english/rss/", "lang": "en", "country": "SG"},
+    ]
+)
+
+SOURCES.extend(
+    [
+        {"name": "🤝 东盟经贸合作", "query": "ASEAN trade OR investment OR supply chain OR digital economy", "lang": "en", "country": "SG"},
+        {"name": "🛡️ 东盟防务军事", "query": "ASEAN defense OR military OR South China Sea OR arms", "lang": "en", "country": "SG"},
+        {"name": "🤝 中国东盟经贸安全", "query": "China ASEAN trade OR investment OR infrastructure OR security", "lang": "en", "country": "SG"},
+        {"name": "🇺🇸 美中经贸科技", "query": "United States China trade OR tariffs OR semiconductors OR technology", "lang": "en", "country": "US"},
+        {"name": "🇯🇵 日本韩国中国关系", "query": "Japan OR South Korea China relations OR Asia security OR economy", "lang": "en", "country": "JP"},
+        {"name": "🇪🇺 欧盟中国与印太", "query": "European Union China trade OR supply chain OR Indo-Pacific", "lang": "en", "country": "GB"},
     ]
 )
 
