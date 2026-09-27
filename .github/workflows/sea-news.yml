@@ -2,6 +2,22 @@ name: SEA News Digest
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Generate Word files without sending"
+        required: false
+        default: false
+        type: boolean
+      enable_ai_summary:
+        description: "Use AI for summaries and overview"
+        required: false
+        default: true
+        type: boolean
+      digest_items:
+        description: "Number of articles for this run"
+        required: false
+        default: "80"
+        type: string
 
   schedule:
     # UTC 00:00 = Beijing time 08:00
@@ -39,8 +55,9 @@ jobs:
           MAX_ITEMS: "200"
           MAX_PER_SOURCE: "4"
           LOOKBACK_HOURS: "24"
-          DIGEST_ITEMS: "80"
-          ENABLE_AI_SUMMARY: "1"
+          DIGEST_ITEMS: ${{ github.event_name == 'workflow_dispatch' && inputs.digest_items || '80' }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true && '1' || '0' }}
+          ENABLE_AI_SUMMARY: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_ai_summary == false && '0' || '1' }}
           SUMMARY_BATCH_SIZE: "8"
           SUMMARY_WORKERS: "2"
           OVERVIEW_MIN_CHARS: "300"
