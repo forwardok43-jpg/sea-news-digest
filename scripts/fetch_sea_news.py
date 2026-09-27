@@ -24,9 +24,12 @@ TZ = ZoneInfo("Asia/Shanghai")
 WECOM_WEBHOOK_URL = os.getenv("WECOM_WEBHOOK_URL", "").strip()
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
 LOG_PREVIEW = os.getenv("LOG_PREVIEW", "0") == "1"
 ENABLE_AI_SUMMARY = os.getenv("ENABLE_AI_SUMMARY", "0") == "1"
+
 
 
 def env_int(name: str, default: int) -> int:
@@ -38,6 +41,10 @@ def env_int(name: str, default: int) -> int:
 
 FETCH_WORKERS = max(1, env_int("FETCH_WORKERS", 10))
 TRANSLATE_WORKERS = max(1, env_int("TRANSLATE_WORKERS", 4))
+SUMMARY_BATCH_SIZE = max(1, env_int("SUMMARY_BATCH_SIZE", 8))
+SUMMARY_WORKERS = max(1, env_int("SUMMARY_WORKERS", 2))
+OVERVIEW_MIN_CHARS = max(100, env_int("OVERVIEW_MIN_CHARS", 300))
+OVERVIEW_MAX_CHARS = max(OVERVIEW_MIN_CHARS, env_int("OVERVIEW_MAX_CHARS", 500))
 MAX_ITEMS = max(1, env_int("MAX_ITEMS", 200))
 MAX_PER_SOURCE = max(1, env_int("MAX_PER_SOURCE", 4))
 LOOKBACK_HOURS = max(1, env_int("LOOKBACK_HOURS", 24))
@@ -461,71 +468,158 @@ def parse_summary_response(content: str) -> dict[int, str]:
     return summaries
 
 
-def request_openrouter_summaries(
-    articles: list[Article],
-    model: str,
-) -> dict[int, str]:
+def request_cloudflare_chat(messages: list[dict], max_tokens: int) -> str:
+    if not CLOUDFLARE_ACCOUNT_ID or not CLOUDFLARE_API_TOKEN:
+        raise RuntimeError("Cloudflare credentials are not configured")
+
+    models = [
+        item.strip()
+        for item in os.getenv(
+            "CLOUDFLARE_MODELS",
+            "@cf/qwen/qwen3.8-27b,"
+            "@cf/deepseek-ai/deepseek-v4-flash-0731,"
+            "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
+        ).split(",")
+        if item.strip()
+    ]
+    url = (
+        "https://api.cloudflare.com/client/v4/accounts/"
+        f"{CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions"
+    )
+    last_error = None
+
+    for model in models:
+        try:
+            print(f"[AI] Trying Cloudflare model: {model}")
+            response = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {CLOUDFLARE_API_TOKEN}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                },
+                timeout=(10, 180),
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"HTTP {response.status_code}: {response.text[:500]}"
+                )
+            data = response.json()
+            if data.get("errors"):
+                raise RuntimeError(str(data["errors"]))
+            choices = data.get("choices") or []
+            if not choices:
+                raise RuntimeError("Cloudflare returned no choices")
+            content = (choices[0].get("message") or {}).get("content")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+            raise RuntimeError("Cloudflare returned empty content")
+        except Exception as exc:
+            last_error = exc
+            print(f"[WARN] Cloudflare model failed ({model}): {exc}")
+
+    raise RuntimeError("All Cloudflare models failed") from last_error
+
+
+def request_openrouter_chat(messages: list[dict], max_tokens: int) -> str:
+    if not OPENROUTER_API_KEY:
+        raise RuntimeError("OpenRouter API key is not configured")
+
+    last_error = None
+    for model in SUMMARY_MODELS:
+        try:
+            print(f"[AI] Trying OpenRouter model: {model}")
+            response = requests.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/forwardok43-jpg/sea-news-digest",
+                    "X-Title": "SEA News Digest",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.1,
+                    "max_tokens": max_tokens,
+                },
+                timeout=(10, 180),
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"HTTP {response.status_code}: {response.text[:500]}"
+                )
+            data = response.json()
+            if data.get("error"):
+                raise RuntimeError(str(data["error"]))
+            choices = data.get("choices") or []
+            if not choices:
+                raise RuntimeError("OpenRouter returned no choices")
+            message = choices[0].get("message", {}) or {}
+            content = message.get("content") or message.get("reasoning")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+            raise RuntimeError("OpenRouter returned empty content")
+        except Exception as exc:
+            last_error = exc
+            print(f"[WARN] OpenRouter model failed ({model}): {exc}")
+
+    raise RuntimeError("All OpenRouter models failed") from last_error
+
+
+def call_ai_chat(messages: list[dict], max_tokens: int) -> str:
+    errors: list[str] = []
+
+    try:
+        return request_cloudflare_chat(messages, max_tokens)
+    except Exception as exc:
+        errors.append(f"Cloudflare: {exc}")
+
+    try:
+        return request_openrouter_chat(messages, max_tokens)
+    except Exception as exc:
+        errors.append(f"OpenRouter: {exc}")
+
+    raise RuntimeError("All AI providers failed: " + " | ".join(errors))
+
+
+def request_article_summaries(articles: list[Article]) -> dict[int, str]:
     payload_items = []
-    for index, article in enumerate(articles, start=1):
+    for local_id, article in enumerate(articles, start=1):
         payload_items.append(
             {
-                "id": index,
-                "country": article.region,
+                "id": local_id,
+                "country": article.source_country or article.region,
                 "title": article.title,
                 "source": article.publisher,
-                "content": truncate_text(article.content or article.title, 1200),
+                "content": truncate_text(article.content or article.title, 1400),
             }
         )
 
     system_prompt = (
-        "你是专业的东南亚新闻中文编辑。请逐条概括新闻内容，"
-        "每条必须是简体中文，严格控制在12到18个汉字。"
-        "只陈述最重要事实，不评论、不重复标题、不写来源、不加句末标点。"
-        '只返回JSON数组，格式为：[{"id":1,"summary":"摘要"}]。'
+        "你是专业的国际新闻中文编辑。请逐条阅读新闻，"
+        "每条输出50到80个简体中文字的简要摘要。"
+        "只写输入中出现的事实，包含主要主体、事件和影响。"
+        "不评论、不推测、不添加外部信息。"
+        "如果正文信息不足，只根据标题写最保守的事实摘要。"
+        '只返回JSON数组，格式为：[{"id":1,"summary":"简要摘要"}]。'
     )
     user_prompt = json.dumps(payload_items, ensure_ascii=False)
-
-    response = requests.post(
-        OPENROUTER_URL,
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/forwardok43-jpg/sea-news-digest",
-            "X-Title": "SEA News Digest",
-        },
-        json={
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.1,
-            "max_tokens": 900,
-        },
-        timeout=(10, 180),
+    content = call_ai_chat(
+        [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=2200,
     )
-
-    if response.status_code != 200:
-        raise RuntimeError(f"HTTP {response.status_code}: {response.text[:500]}")
-
-    data = response.json()
-    if data.get("error"):
-        raise RuntimeError(str(data["error"]))
-
-    choices = data.get("choices") or []
-    if not choices:
-        raise RuntimeError("OpenRouter returned no choices")
-
-    message = choices[0].get("message", {}) or {}
-    content = message.get("content") or message.get("reasoning") or ""
-    if not isinstance(content, str):
-        raise RuntimeError(f"Unexpected content type: {type(content).__name__}")
-
     summaries = parse_summary_response(content)
     if not summaries:
-        raise RuntimeError(
-            f"Could not parse summaries: {truncate_text(content, 300)}"
-        )
+        raise RuntimeError(f"Could not parse article summaries: {content[:300]}")
     return summaries
 
 
@@ -552,43 +646,15 @@ def translate_title_to_chinese(title: str, source_lang: str) -> str:
                 (data.get("responseData") or {}).get("translatedText")
             )
             if chinese_char_count(translated) >= 4:
-                print(f"[TITLE] Translated with {langpair}: {truncate_text(translated, 30)}")
                 return translated
         except Exception as exc:
             print(f"[WARN] Title translation failed ({langpair}): {exc}")
 
     return ""
 
+
 def summarize_articles(articles: list[Article]) -> list[Article]:
     summaries: dict[int, str] = {}
-
-    if ENABLE_AI_SUMMARY and OPENROUTER_API_KEY:
-        minimum_valid = max(1, len(articles) // 2)
-        for model in SUMMARY_MODELS:
-            try:
-                print(f"[SUMMARY] Trying model: {model}")
-                candidate = request_openrouter_summaries(articles, model)
-                valid = {
-                    item_id: summary
-                    for item_id, summary in candidate.items()
-                    if chinese_char_count(summary) >= 6
-                }
-                if len(valid) >= minimum_valid:
-                    summaries = valid
-                    print(
-                        f"[SUMMARY] Success with model: {model}; "
-                        f"valid={len(valid)}/{len(articles)}"
-                    )
-                    break
-                print(
-                    f"[WARN] Model returned insufficient Chinese summaries "
-                    f"({len(valid)}/{len(articles)}): {model}"
-                )
-            except Exception as exc:
-                print(f"[WARN] Summary model failed ({model}): {exc}")
-            time.sleep(2)
-    else:
-        print("[INFO] AI content summaries are disabled; translating full titles only")
 
     translated_titles: dict[int, str] = {}
     with ThreadPoolExecutor(
@@ -611,9 +677,38 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
             except Exception as exc:
                 print(f"[WARN] Title translation worker failed: {exc}")
 
+    if ENABLE_AI_SUMMARY:
+        batches = [
+            (start, articles[start - 1 : start - 1 + SUMMARY_BATCH_SIZE])
+            for start in range(1, len(articles) + 1, SUMMARY_BATCH_SIZE)
+        ]
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(SUMMARY_WORKERS, len(batches)))
+        ) as executor:
+            futures = {
+                executor.submit(request_article_summaries, batch): start
+                for start, batch in batches
+            }
+            for future in as_completed(futures):
+                start = futures[future]
+                try:
+                    batch_summaries = future.result()
+                    for local_id, summary in batch_summaries.items():
+                        summaries[start + local_id - 1] = clean_text(summary)
+                    print(
+                        f"[SUMMARY] Batch starting at {start}: "
+                        f"{len(batch_summaries)} summaries"
+                    )
+                except Exception as exc:
+                    print(f"[WARN] Summary batch failed at {start}: {exc}")
+    else:
+        print("[INFO] AI content summaries are disabled")
+
     summarized: list[Article] = []
     for index, article in enumerate(articles, start=1):
-        summary = normalize_summary(summaries.get(index, ""), article)
+        summary = clean_text(summaries.get(index, ""))
+        if len(summary) > 120:
+            summary = summary[:120].rstrip("。！？!?，,；;：:") + "。"
         summarized.append(
             replace(
                 article,
@@ -622,6 +717,60 @@ def summarize_articles(articles: list[Article]) -> list[Article]:
             )
         )
     return summarized
+
+
+def build_overview(articles: list[Article]) -> str:
+    items = [
+        article
+        for article in articles
+        if article.summary and chinese_char_count(article.summary) >= 10
+    ]
+    if len(items) < 5:
+        print(f"[WARN] Not enough summaries for overview: {len(items)}")
+        return ""
+
+    lines = []
+    for index, article in enumerate(items, start=1):
+        lines.append(
+            f"{index}. [{article.source_country or article.region}] "
+            f"{article.summary}"
+        )
+
+    system_prompt = (
+        "你是东盟与国际关系新闻主编。请根据提供的新闻摘要，"
+        f"写一篇{OVERVIEW_MIN_CHARS}到{OVERVIEW_MAX_CHARS}个简体中文字的总体概述。"
+        "优先总结东盟内部事务和成员国的重大政治、军事、经济新闻；"
+        "其次总结东盟与主要大国的关系，以及世界经济与东盟的联系。"
+        "删除重复信息，按主题自然组织，不写标题，不写编号，不评论，"
+        "不得添加输入中没有的事实。"
+    )
+    overview = clean_text(
+        call_ai_chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "\n".join(lines)},
+            ],
+            max_tokens=1800,
+        )
+    )
+    overview = re.sub(r"^(总览|概述)[：:]\s*", "", overview)
+    if len(overview) > OVERVIEW_MAX_CHARS:
+        cutoff = overview[:OVERVIEW_MAX_CHARS]
+        boundary = max(
+            cutoff.rfind("。"),
+            cutoff.rfind("！"),
+            cutoff.rfind("？"),
+        )
+        if boundary >= OVERVIEW_MIN_CHARS:
+            overview = cutoff[: boundary + 1]
+        else:
+            overview = cutoff.rstrip() + "。"
+
+    print(
+        f"[OVERVIEW] Generated {chinese_char_count(overview)} Chinese characters "
+        f"from {len(items)} article summaries"
+    )
+    return overview
 
 def source_label(article: Article) -> str:
     if article.publisher:
@@ -722,21 +871,46 @@ def main() -> None:
         digest_articles = enrich_articles(digest_articles)
     digest_articles = summarize_articles(digest_articles)
 
+    overview = build_overview(digest_articles) if ENABLE_AI_SUMMARY else ""
     messages = build_messages(digest_articles)
+
     for index, message in enumerate(messages, start=1):
-        print(f"[SEND] Part {index}/{len(messages)}, {len(message.encode('utf-8'))} bytes")
+        print(
+            f"[SEND DETAIL] Part {index}/{len(messages)}, "
+            f"{len(message.encode('utf-8'))} bytes"
+        )
+
+    if overview:
+        overview_message = f"【今日东盟新闻总览】\n\n{overview}"
+        print(
+            f"[SEND OVERVIEW] {len(overview_message.encode('utf-8'))} bytes, "
+            f"{chinese_char_count(overview)} Chinese characters"
+        )
+    else:
+        overview_message = ""
+        print("[WARN] No overview generated; sending detailed digest only")
 
     if LOG_PREVIEW:
-        print("\n\n--- preview ---\n\n" + "\n\n--- next message ---\n\n".join(messages))
+        if overview_message:
+            print("\n\n--- overview preview ---\n\n" + overview_message)
+        print("\n\n--- detail preview ---\n\n" + "\n\n--- next message ---\n\n".join(messages))
 
     if DRY_RUN:
-        print("\n\n--- message chunk ---\n\n".join(messages))
+        if overview_message:
+            print("\n\n" + overview_message)
+        print("\n\n--- detailed digest ---\n\n" + "\n\n--- next message ---\n\n".join(messages))
         return
+
+    if overview_message:
+        send_wecom_text(session, overview_message)
 
     for message in messages:
         send_wecom_text(session, message)
 
-    print(f"Pushed {len(digest_articles)} country summaries in {len(messages)} message(s)")
+    print(
+        f"Pushed overview={bool(overview_message)} and "
+        f"{len(digest_articles)} detailed summaries in {len(messages)} message(s)"
+    )
 
 
 if __name__ == "__main__":
