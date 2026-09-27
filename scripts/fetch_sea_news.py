@@ -481,8 +481,9 @@ def request_cloudflare_chat(messages: list[dict], max_tokens: int) -> str:
         item.strip()
         for item in os.getenv(
             "CLOUDFLARE_MODELS",
-            "@cf/qwen/qwen3.8-27b,"
-            "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
+            "@cf/google/gemma-4-26b-a4b-it,"
+            "@cf/aisingapore/gemma-sea-lion-v4-27b-it,"
+            "@cf/qwen/qwen3.8-27b",
         ).split(",")
         if item.strip()
     ]
@@ -603,7 +604,7 @@ def request_article_summaries(articles: list[Article]) -> dict[int, str]:
                 "country": article.source_country or article.region,
                 "title": article.title,
                 "source": article.publisher,
-                "content": truncate_text(article.content or article.title, 1400),
+                "content": truncate_text(article.content or article.title, 700),
             }
         )
 
