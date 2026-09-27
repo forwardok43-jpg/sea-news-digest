@@ -477,7 +477,6 @@ def request_cloudflare_chat(messages: list[dict], max_tokens: int) -> str:
         for item in os.getenv(
             "CLOUDFLARE_MODELS",
             "@cf/qwen/qwen3.8-27b,"
-            "@cf/deepseek-ai/deepseek-v4-flash-0731,"
             "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
         ).split(",")
         if item.strip()
@@ -517,6 +516,7 @@ def request_cloudflare_chat(messages: list[dict], max_tokens: int) -> str:
                 raise RuntimeError("Cloudflare returned no choices")
             content = (choices[0].get("message") or {}).get("content")
             if isinstance(content, str) and content.strip():
+                print(f"[AI] Cloudflare success with model: {model}")
                 return content.strip()
             raise RuntimeError("Cloudflare returned empty content")
         except Exception as exc:
@@ -563,6 +563,7 @@ def request_openrouter_chat(messages: list[dict], max_tokens: int) -> str:
             message = choices[0].get("message", {}) or {}
             content = message.get("content") or message.get("reasoning")
             if isinstance(content, str) and content.strip():
+                print(f"[AI] OpenRouter success with model: {model}")
                 return content.strip()
             raise RuntimeError("OpenRouter returned empty content")
         except Exception as exc:
@@ -628,30 +629,37 @@ def translate_title_to_chinese(title: str, source_lang: str) -> str:
     if chinese_char_count(title) >= 6:
         return title
 
-    language = (source_lang or "auto").strip()
+    language = (source_lang or "en").strip()
     language_pairs = [f"{language}|zh-CN"]
     if language != "en":
         language_pairs.append("en|zh-CN")
 
     for langpair in language_pairs:
-        try:
-            response = requests.get(
-                "https://api.mymemory.translated.net/get",
-                params={"q": title[:450], "langpair": langpair},
-                timeout=20,
-            )
-            response.raise_for_status()
-            data = response.json()
-            translated = clean_text(
-                (data.get("responseData") or {}).get("translatedText")
-            )
-            if chinese_char_count(translated) >= 4:
-                return translated
-        except Exception as exc:
-            print(f"[WARN] Title translation failed ({langpair}): {exc}")
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    "https://api.mymemory.translated.net/get",
+                    params={"q": title[:450], "langpair": langpair},
+                    timeout=20,
+                )
+                if response.status_code == 429:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                translated = clean_text(
+                    (data.get("responseData") or {}).get("translatedText")
+                )
+                if chinese_char_count(translated) >= 4:
+                    return translated
+                break
+            except Exception as exc:
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                print(f"[WARN] Title translation failed ({langpair}): {exc}")
 
     return ""
-
 
 def summarize_articles(articles: list[Article]) -> list[Article]:
     summaries: dict[int, str] = {}
@@ -810,8 +818,6 @@ def build_messages(articles: list[Article]) -> list[str]:
         local_time = article.published.astimezone(TZ).strftime("%m-%d %H:%M")
         title = article.title_zh or article.title
         block = f"【{article.region}】\n{title}"
-        if article.summary and article.summary != title:
-            block += f"\n摘要：{article.summary}"
         origin = article.source_country or article.region
         block += f"\n出处国家/地区：{origin}\n来源：{source_label(article)} · {local_time}"
         article_blocks.append(block)
