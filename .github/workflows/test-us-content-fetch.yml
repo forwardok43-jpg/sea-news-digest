@@ -1,0 +1,41 @@
+name: US Content Fetch Test (Manual Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  us-content-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install US digest dependencies
+        run: pip install -r us-news/requirements.txt
+
+      - name: Compile US scripts
+        run: python -m py_compile us-news/scripts/fetch_us_digest.py us-news/scripts/test_us_content_fetch.py
+
+      - name: Test US and major-economy content extraction
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python us-news/scripts/test_us_content_fetch.py
+
+      - name: Upload content test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-content-results
+          path: content_test_results.json
+          if-no-files-found: warn
