@@ -1,0 +1,80 @@
+name: US & Major Economies News Digest (Daily)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only generate Word files; do not send to WeCom"
+        required: false
+        default: true
+        type: boolean
+      enable_ai_summary:
+        description: "Use Cloudflare/OpenRouter AI summaries"
+        required: false
+        default: true
+        type: boolean
+      digest_items:
+        description: "Number of articles for this run"
+        required: false
+        default: "80"
+        type: string
+
+  schedule:
+    # UTC 00:00 = Beijing time 08:00
+    - cron: "0 0 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: us-news-digest
+  cancel-in-progress: false
+
+jobs:
+  push-us-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install US digest dependencies
+        run: pip install -r us-news/requirements.txt
+
+      - name: Fetch, summarize and push US digest
+        env:
+          WECOM_WEBHOOK_URL: ${{ secrets.WECOM_WEBHOOK_URL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+          PYTHONFAULTHANDLER: "1"
+          MAX_ITEMS: "200"
+          MAX_PER_SOURCE: "4"
+          LOOKBACK_HOURS: "24"
+          DIGEST_ITEMS: ${{ github.event_name == 'schedule' && '80' || inputs.digest_items }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+          ENABLE_AI_SUMMARY: ${{ github.event_name == 'schedule' && '1' || (inputs.enable_ai_summary && '1' || '0') }}
+          SUMMARY_BATCH_SIZE: "10"
+          SUMMARY_WORKERS: "2"
+          OVERVIEW_MIN_CHARS: "300"
+          OVERVIEW_MAX_CHARS: "500"
+          FETCH_WORKERS: "6"
+          TRANSLATE_WORKERS: "2"
+        run: python us-news/scripts/fetch_us_digest.py
+
+      - name: Upload generated Word documents
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: us-news-docx
+          path: output/*.docx
+          if-no-files-found: warn
+          retention-days: 7
