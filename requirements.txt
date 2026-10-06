@@ -3,3 +3,4 @@ requests>=2.32.3,<3
 trafilatura>=2.0.0,<3
 googlenewsdecoder>=0.2.1,<1
 python-docx>=1.2.0,<2
+selectolax>=0.4.13,<1
