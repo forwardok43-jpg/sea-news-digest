@@ -151,6 +151,21 @@ def build_google_news_url(query: str, lang: str, country: str) -> str:
     )
 
 
+def build_bing_news_url(query: str) -> str:
+    return (
+        "https://www.bing.com/news/search"
+        f"?q={quote_plus(query)}&format=rss&setlang=en-US&cc=US"
+    )
+
+
+def normalize_feed_link(link: str) -> str:
+    link = clean_text(link)
+    if "bing.com/news/apiclick" not in link:
+        return link
+    query = parse_qs(urlparse(link).query)
+    direct_url = (query.get("url") or [""])[0]
+    return direct_url or link
+
 def get_feed(session: requests.Session, url: str):
     last_error = None
     for attempt in range(3):
@@ -205,8 +220,17 @@ def is_us_related(title: str) -> bool:
 
 def fetch_source(session: requests.Session, source: dict) -> list[Article]:
     url = source.get("url") or build_google_news_url(source["query"], source.get("lang", "en"), source.get("country", "US"))
-    feed = get_feed(session, url)
-
+    try:
+        feed = get_feed(session, url)
+    except Exception as primary_error:
+        if source.get("url") or "news.google.com" not in url:
+            raise
+        fallback_url = build_bing_news_url(source["query"])
+        print(f"[FALLBACK] {source['name']}: Google RSS failed, trying Bing RSS")
+        try:
+            feed = get_feed(session, fallback_url)
+        except Exception:
+            raise primary_error
     if getattr(feed, "bozo", False):
         print(f"[WARN] RSS parse issue: {source['name']}")
 
@@ -220,7 +244,7 @@ def fetch_source(session: requests.Session, source: dict) -> list[Article]:
 
         publisher = entry_publisher(entry)
         title = clean_title(clean_text(entry.get("title")), publisher)
-        link = clean_text(entry.get("link"))
+        link = normalize_feed_link(entry.get("link"))
         if not title or not link:
             continue
         if any(domain in publisher.casefold() for domain in SOCIAL_DOMAINS):
